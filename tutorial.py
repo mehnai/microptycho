@@ -52,9 +52,9 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 128,               # simulation grid size
     "dx": 0.43,             # Å per pixel
-    "dz": 10.0,             # Å slice spacing (well below depth resolution λ/α² ≈ 250 Å)
+    "dz": 20.0,             # Å slice spacing (well below depth resolution λ/α² ≈ 250 Å)
     "patch_size": 24,       # ptychography patch (pixels)
-    "n_iter": 100,           # ePIE iterations
+    "n_iter": 50,           # ePIE iterations
     "scan_range": 22,       # Å (must keep probe patch inside object: <= (N/2 - patch_size/2)*dx)
 }
 print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']}Å, {DEMO['n_iter']} ePIE iterations")
