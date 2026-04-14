@@ -493,6 +493,20 @@ class MicroPtycho:
             if normalize_probe and beta != 0:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
 
+            if beta != 0:
+                # Remove linear phase tilt from probe to break probe-object ramp degeneracy.
+                # A tilt in the probe is indistinguishable from a conjugate ramp in the object
+                # because it leaves all diffraction patterns unchanged. Removing it each epoch
+                # prevents the object from accumulating a compensating phase ramp.
+                probe_ft = np.fft.fft2(probe)
+                intensity_k = np.abs(probe_ft)**2
+                total = np.sum(intensity_k) + eps
+                cx = np.sum(probe_KX * intensity_k) / total
+                cy = np.sum(probe_KY * intensity_k) / total
+                probe = np.fft.ifft2(
+                    probe_ft * np.exp(-1j * 2 * np.pi * (cx * probe_KX + cy * probe_KY))
+                )
+
             residuals.append(iter_residual)
             if verbose:
                 print(f"Iteration {i + 1}/{n_iter} completed. Residual: {iter_residual:.6e}")
