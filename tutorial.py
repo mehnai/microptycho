@@ -367,6 +367,11 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     object_constraint=None,
 )
 
+# Align per-slice global phase for fair visual comparison against ground truth.
+O_recon_aligned = O_recon.copy()
+for k in range(n_slices):
+    O_recon_aligned[k] = mp.align_global_phase(O_recon_aligned[k], O_true[k])
+
 print(f"\n  Initial residual : {residuals[0]:.4e}")
 print(f"  Final residual   : {residuals[-1]:.4e}")
 print(f"  Improvement      : {residuals[0]/residuals[-1]:.2f}x")
@@ -375,7 +380,7 @@ step("Saving reconstruction figures...")
 mp.plot_residuals(residuals)
 save("12_residuals.png")
 
-recon_proj = np.angle(O_recon).sum(axis=0)
+recon_proj = np.angle(O_recon_aligned).sum(axis=0)
 true_proj = np.angle(O_true).sum(axis=0)
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 im0 = axes[0].imshow(true_proj, cmap='twilight')
@@ -387,8 +392,10 @@ plt.colorbar(im1, ax=axes[1], label='phase (rad)')
 plt.tight_layout()
 save("13_recon_projected_phase.png")
 
-mp.plot_multislice_reconstruction(O_recon, O_true)
+mp.plot_multislice_reconstruction(O_recon_aligned, O_true)
 save("14_multislice_reconstruction.png")
+
+probe_recon_aligned = mp.align_global_phase(probe_recon, probe_patch)
 
 extent = np.array([-patch_size//2, patch_size//2,
                    -patch_size//2, patch_size//2]) * mp.dx
@@ -407,7 +414,7 @@ axes[1, 0].set_title('Reconstructed probe — intensity')
 axes[1, 0].set_xlabel('x (Å)')
 axes[1, 0].set_ylabel('y (Å)')
 
-axes[1, 1].imshow(np.angle(probe_recon), cmap='twilight', extent=extent, vmin=-np.pi, vmax=np.pi)
+axes[1, 1].imshow(np.angle(probe_recon_aligned), cmap='twilight', extent=extent, vmin=-np.pi, vmax=np.pi)
 axes[1, 1].set_title('Reconstructed probe — phase')
 axes[1, 1].set_xlabel('x (Å)')
 
@@ -415,7 +422,7 @@ plt.suptitle('Probe Reconstruction (random init → aberrated probe)', fontsize=
 plt.tight_layout()
 save("15_probe_reconstruction.png")
 
-probe_mse = np.mean(np.abs(probe_recon - probe_patch)**2)
+probe_mse = np.mean(np.abs(probe_recon_aligned - probe_patch)**2)
 print(f"  Probe MSE: {probe_mse:.4e}")
 
 slices_to_compare = [0, n_slices // 2, n_slices - 1]
@@ -423,7 +430,7 @@ fig, axes = plt.subplots(2, len(slices_to_compare), figsize=(5 * len(slices_to_c
 for col, s in enumerate(slices_to_compare):
     axes[0, col].imshow(np.angle(O_true[s]), cmap='twilight')
     axes[0, col].set_title(f'True — slice {s}')
-    axes[1, col].imshow(np.angle(O_recon[s]), cmap='twilight')
+    axes[1, col].imshow(np.angle(O_recon_aligned[s]), cmap='twilight')
     axes[1, col].set_title(f'Reconstructed — slice {s}')
 
 axes[0, 0].set_ylabel('True phase')
