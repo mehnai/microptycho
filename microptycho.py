@@ -192,6 +192,29 @@ class MicroPtycho:
             return field
         return field * np.exp(-1j * np.angle(overlap))
 
+    @staticmethod
+    def align_phase_affine(field, reference, dx, weight_floor=1e-12):
+        """
+        Align global phase + linear phase ramp in `field` to `reference`.
+        Useful for multislice ptychography where affine phase gauge freedom
+        can make visually identical reconstructions look mismatched.
+        """
+        if field.shape != reference.shape:
+            raise ValueError("field and reference must have identical shapes.")
+        ny, nx = field.shape
+        x = (np.arange(nx) - nx // 2) * dx
+        y = (np.arange(ny) - ny // 2) * dx
+        X, Y = np.meshgrid(x, y)
+
+        phase_diff = np.angle(field * np.conj(reference))
+        weight = np.maximum(np.abs(field) * np.abs(reference), weight_floor)
+        A = np.column_stack((X.ravel(), Y.ravel(), np.ones(field.size)))
+        Aw = A * np.sqrt(weight.ravel())[:, None]
+        bw = phase_diff.ravel() * np.sqrt(weight.ravel())
+        coeffs, *_ = np.linalg.lstsq(Aw, bw, rcond=None)
+        ax, ay, c = coeffs
+        return field * np.exp(-1j * (ax * X + ay * Y + c))
+
     # ------------------------------------------------------------------ #
     #  Wave propagation
     # ------------------------------------------------------------------ #
