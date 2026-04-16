@@ -506,7 +506,7 @@ class MicroPtycho:
                     O[k, y_slice, x_slice] = patch_updated
                     if k == 0 and beta != 0:
                         patch_intensity = np.abs(patch)**2
-                        probe_update = beta * np.conj(patch_updated) / (
+                        probe_update = beta * np.conj(patch) / (
                             (1 - rho_probe) * np.max(patch_intensity)
                             + rho_probe * patch_intensity
                             + eps
@@ -514,7 +514,10 @@ class MicroPtycho:
                         probe += self._shift_field(
                             probe_update, -shift_x, -shift_y, dx, probe_KX, probe_KY
                         )
-                    psi_corrected = self._inverse_transmission(patch_updated, eps) * psi_corrected
+                    # Backpropagation should use the same (pre-update) transmission
+                    # used to generate `error` above. Using the updated patch here
+                    # mixes forward and backward models and slows convergence.
+                    psi_corrected = self._inverse_transmission(patch, eps) * psi_corrected
 
             if normalize_probe and beta != 0:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
