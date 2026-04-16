@@ -384,7 +384,7 @@ class MicroPtycho:
     def ePIE(n_iter, initial_probe, initial_object, intensity, grid_positions,
              dx, patch_size=24, alpha=1.0, beta=1.0,
              object_constraint=None, rho_object=0.2, rho_probe=0.2,
-             normalize_probe=True, verbose=True):
+             normalize_probe=True, remove_probe_phase_ramp=True, verbose=True):
         MicroPtycho._validate_patch_size(patch_size)
         MicroPtycho._validate_probe_shape(initial_probe, patch_size)
         if len(intensity) != len(grid_positions):
@@ -425,7 +425,7 @@ class MicroPtycho:
                 initial_object[y_slice, x_slice] = patch_updated
 
                 if beta != 0:
-                    probe_update = beta * np.conj(patch_updated) / (
+                    probe_update = beta * np.conj(patch) / (
                         (1 - rho_probe) * np.max(patch_intensity) + rho_probe * patch_intensity + eps
                     ) * error
                     initial_probe += MicroPtycho._shift_field(
@@ -444,6 +444,8 @@ class MicroPtycho:
                     target_probe_energy,
                     eps=eps,
                 )
+            if beta != 0 and remove_probe_phase_ramp:
+                initial_probe = MicroPtycho._remove_phase_ramp(initial_probe, dx=dx, eps=eps)
             residuals.append(res)
             if verbose:
                 print(f"Iteration {i + 1}/{n_iter}, Residual: {res:.4e}")
