@@ -166,6 +166,32 @@ class MicroPtycho:
             return probe
         return probe * np.sqrt(target_energy / current_energy)
 
+    @staticmethod
+    def _remove_phase_ramp(field, dx, eps=1e-12):
+        """Remove the best-fit linear phase ramp from a complex field."""
+        if field.size == 0:
+            return field
+        phase_dx = np.angle(field[:, 1:] * np.conj(field[:, :-1])) / (2 * np.pi * dx)
+        phase_dy = np.angle(field[1:, :] * np.conj(field[:-1, :])) / (2 * np.pi * dx)
+        weight_x = np.sqrt(np.abs(field[:, 1:]) * np.abs(field[:, :-1]))
+        weight_y = np.sqrt(np.abs(field[1:, :]) * np.abs(field[:-1, :]))
+        qx = np.sum(weight_x * phase_dx) / (np.sum(weight_x) + eps)
+        qy = np.sum(weight_y * phase_dy) / (np.sum(weight_y) + eps)
+
+        ny, nx = field.shape
+        x = (np.arange(nx) - nx // 2) * dx
+        y = (np.arange(ny) - ny // 2) * dx
+        X, Y = np.meshgrid(x, y)
+        return field * np.exp(-1j * 2 * np.pi * (qx * X + qy * Y))
+
+    @staticmethod
+    def align_global_phase(field, reference):
+        """Align the global phase of field to reference via least-squares overlap."""
+        overlap = np.vdot(reference, field)
+        if np.isclose(np.abs(overlap), 0.0):
+            return field
+        return field * np.exp(-1j * np.angle(overlap))
+
     # ------------------------------------------------------------------ #
     #  Wave propagation
     # ------------------------------------------------------------------ #
@@ -488,7 +514,7 @@ class MicroPtycho:
                         probe += self._shift_field(
                             probe_update, -shift_x, -shift_y, dx, probe_KX, probe_KY
                         )
-                    psi_corrected = self._inverse_transmission(patch, eps) * psi_corrected
+                    psi_corrected = self._inverse_transmission(patch_updated, eps) * psi_corrected
 
             if normalize_probe and beta != 0:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
@@ -498,14 +524,7 @@ class MicroPtycho:
                 # A tilt in the probe is indistinguishable from a conjugate ramp in the object
                 # because it leaves all diffraction patterns unchanged. Removing it each epoch
                 # prevents the object from accumulating a compensating phase ramp.
-                probe_ft = np.fft.fft2(probe)
-                intensity_k = np.abs(probe_ft)**2
-                total = np.sum(intensity_k) + eps
-                cx = np.sum(probe_KX * intensity_k) / total
-                cy = np.sum(probe_KY * intensity_k) / total
-                probe = np.fft.ifft2(
-                    probe_ft * np.exp(-1j * 2 * np.pi * (cx * probe_KX + cy * probe_KY))
-                )
+                probe = self._remove_phase_ramp(probe, dx=dx, eps=eps)
 
             residuals.append(iter_residual)
             if verbose:
