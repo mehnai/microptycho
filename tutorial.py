@@ -365,6 +365,7 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     beta_0=0.02,
     tau=10,
     object_constraint=None,
+    random_seed=7,
 )
 
 # Align per-slice global phase for fair visual comparison against ground truth.
