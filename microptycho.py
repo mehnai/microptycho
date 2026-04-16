@@ -384,7 +384,7 @@ class MicroPtycho:
     def ePIE(n_iter, initial_probe, initial_object, intensity, grid_positions,
              dx, patch_size=24, alpha=1.0, beta=1.0,
              object_constraint=None, rho_object=0.2, rho_probe=0.2,
-             normalize_probe=True, verbose=True, remove_probe_phase_ramp=True):
+             normalize_probe=True, verbose=True, remove_probe_phase_ramp=False):
         MicroPtycho._validate_patch_size(patch_size)
         MicroPtycho._validate_probe_shape(initial_probe, patch_size)
         if len(intensity) != len(grid_positions):
@@ -425,7 +425,10 @@ class MicroPtycho:
                 initial_object[y_slice, x_slice] = patch_updated
 
                 if beta != 0:
-                    probe_update = beta * np.conj(patch) / (
+                    # Standard Maiden-Rodenburg (2009) ePIE probe update: uses the
+                    # just-updated object so the probe sees the best current
+                    # estimate of the transmission.
+                    probe_update = beta * np.conj(patch_updated) / (
                         (1 - rho_probe) * np.max(patch_intensity) + rho_probe * patch_intensity + eps
                     ) * error
                     initial_probe += MicroPtycho._shift_field(
@@ -459,7 +462,7 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
-                        normalize_probe=True, remove_probe_phase_ramp=True,
+                        normalize_probe=True, remove_probe_phase_ramp=False,
                         random_seed=None,
                         verbose=True):
         if fresnel_kernel is None:
@@ -534,7 +537,9 @@ class MicroPtycho:
                     O[k, y_slice, x_slice] = patch_updated
                     if k == 0 and beta != 0:
                         patch_intensity = np.abs(patch)**2
-                        probe_update = beta * np.conj(patch) / (
+                        # Standard Maiden-Rodenburg (2009) ePIE probe update: uses
+                        # the just-updated object (transmission) for the gradient.
+                        probe_update = beta * np.conj(patch_updated) / (
                             (1 - rho_probe) * np.max(patch_intensity)
                             + rho_probe * patch_intensity
                             + eps
