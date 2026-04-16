@@ -384,7 +384,7 @@ class MicroPtycho:
     def ePIE(n_iter, initial_probe, initial_object, intensity, grid_positions,
              dx, patch_size=24, alpha=1.0, beta=1.0,
              object_constraint=None, rho_object=0.2, rho_probe=0.2,
-             normalize_probe=True, remove_probe_phase_ramp=True, verbose=True):
+             normalize_probe=True, verbose=True, remove_probe_phase_ramp=True):
         MicroPtycho._validate_patch_size(patch_size)
         MicroPtycho._validate_probe_shape(initial_probe, patch_size)
         if len(intensity) != len(grid_positions):
