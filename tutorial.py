@@ -188,7 +188,7 @@ scope.plot_ctf_1d(N=256, dx=0.43)
 save("06_ctf_1d.png")
 
 step("Constructing ideal and aberrated probes for comparison...")
-scope_ideal = Microscope(voltage=200e3, alpha=0.010)
+scope_ideal = Microscope(voltage=200e3, alpha=scope.alpha)
 probe_ideal = scope_ideal.construct_probe(N=mp.N, dx=mp.dx)
 probe_aberrated = scope.construct_probe_for(mp)
 
@@ -238,7 +238,7 @@ hp = patch_size // 2
 extent = np.array([-hp, hp, -hp, hp]) * mp.dx
 
 for col, (label, params) in enumerate(aberrations):
-    s = Microscope(voltage=200e3, alpha=0.010, **params)
+    s = Microscope(voltage=200e3, alpha=scope.alpha, **params)
     p = s.construct_probe(N=mp.N, dx=mp.dx)
     patch = np.fft.fftshift(p)[c-hp:c+hp, c-hp:c+hp]
     axes[0, col].imshow(np.abs(patch)**2, cmap='hot', extent=extent)
@@ -312,6 +312,8 @@ save("10_scan_positions.png")
 patch_size = DEMO["patch_size"]
 probe_patch = mp.extract_probe_patch(patch_size=patch_size)
 print(f"  Probe patch shape: {probe_patch.shape}")
+depth_resolution = mp.wavelength / (scope.alpha**2)
+print(f"  Axial resolution estimate λ/α² ≈ {depth_resolution:.1f} Å (dz = {DEMO['dz']:.1f} Å)")
 
 step("Building Fresnel propagation kernel...")
 fresnel_kernel = mp.make_fresnel_kernel(
@@ -365,12 +367,17 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     beta_0=0.02,
     tau=10,
     object_constraint=None,
+    random_seed=7,
 )
 
 # Align per-slice global phase for fair visual comparison against ground truth.
 O_recon_aligned = O_recon.copy()
 for k in range(n_slices):
-    O_recon_aligned[k] = mp.align_global_phase(O_recon_aligned[k], O_true[k])
+    O_recon_aligned[k] = mp.align_phase_affine(
+        O_recon_aligned[k],
+        O_true[k],
+        dx=mp.dx,
+    )
 
 print(f"\n  Initial residual : {residuals[0]:.4e}")
 print(f"  Final residual   : {residuals[-1]:.4e}")
@@ -395,7 +402,7 @@ save("13_recon_projected_phase.png")
 mp.plot_multislice_reconstruction(O_recon_aligned, O_true)
 save("14_multislice_reconstruction.png")
 
-probe_recon_aligned = mp.align_global_phase(probe_recon, probe_patch)
+probe_recon_aligned = mp.align_phase_affine(probe_recon, probe_patch, dx=mp.dx)
 
 extent = np.array([-patch_size//2, patch_size//2,
                    -patch_size//2, patch_size//2]) * mp.dx
