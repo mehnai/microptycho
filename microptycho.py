@@ -434,7 +434,9 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
-                        normalize_probe=True, verbose=True):
+                        normalize_probe=True, remove_probe_phase_ramp=True,
+                        random_seed=None,
+                        verbose=True):
         if fresnel_kernel is None:
             fresnel_kernel = self.make_fresnel_kernel(shape=probe.shape, dx=self.dx if dx is None else dx)
         if dx is None:
@@ -448,6 +450,7 @@ class MicroPtycho:
         if beta_0 is None:
             beta_0 = alpha_0
         positions = np.arange(len(intensity))
+        rng = np.random.default_rng(random_seed)
         residuals = []
         probe_KX, probe_KY = self.make_k_grid(probe.shape, dx)
         eps = 1e-12
@@ -455,7 +458,7 @@ class MicroPtycho:
         measured_amplitude = np.sqrt(np.maximum(intensity, 0.0))
 
         for i in range(n_iter):
-            np.random.shuffle(positions)
+            rng.shuffle(positions)
             iter_residual = 0.0
             alpha = alpha_0 / (1 + i / tau)
             beta = beta_0 / (1 + i / tau)
@@ -514,12 +517,15 @@ class MicroPtycho:
                         probe += self._shift_field(
                             probe_update, -shift_x, -shift_y, dx, probe_KX, probe_KY
                         )
-                    psi_corrected = self._inverse_transmission(patch_updated, eps) * psi_corrected
+                    # Backpropagation should use the same (pre-update) transmission
+                    # used to generate `error` above. Using the updated patch here
+                    # mixes forward and backward models and slows convergence.
+                    psi_corrected = self._inverse_transmission(patch, eps) * psi_corrected
 
             if normalize_probe and beta != 0:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
 
-            if beta != 0:
+            if beta != 0 and remove_probe_phase_ramp:
                 # Remove linear phase tilt from probe to break probe-object ramp degeneracy.
                 # A tilt in the probe is indistinguishable from a conjugate ramp in the object
                 # because it leaves all diffraction patterns unchanged. Removing it each epoch
