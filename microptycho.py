@@ -168,15 +168,24 @@ class MicroPtycho:
 
     @staticmethod
     def _remove_phase_ramp(field, dx, eps=1e-12):
-        """Remove the best-fit linear phase ramp from a complex field."""
+        """Remove the best-fit linear phase ramp from a complex field.
+
+        Uses the standard maximum-likelihood momentum estimator:
+            q_x = arg( Σ  ψ(x+dx) · ψ*(x) ) / (2π dx)
+        Summing the complex products before taking the angle avoids the
+        phase-wrapping / random-phase-tail issues that break a naive
+        weighted mean of angle(·) values.
+        """
         if field.size == 0:
             return field
-        phase_dx = np.angle(field[:, 1:] * np.conj(field[:, :-1])) / (2 * np.pi * dx)
-        phase_dy = np.angle(field[1:, :] * np.conj(field[:-1, :])) / (2 * np.pi * dx)
-        weight_x = np.sqrt(np.abs(field[:, 1:]) * np.abs(field[:, :-1]))
-        weight_y = np.sqrt(np.abs(field[1:, :]) * np.abs(field[:-1, :]))
-        qx = np.sum(weight_x * phase_dx) / (np.sum(weight_x) + eps)
-        qy = np.sum(weight_y * phase_dy) / (np.sum(weight_y) + eps)
+        dx_prod = field[:, 1:] * np.conj(field[:, :-1])
+        dy_prod = field[1:, :] * np.conj(field[:-1, :])
+        sum_x = np.sum(dx_prod)
+        sum_y = np.sum(dy_prod)
+        if np.abs(sum_x) < eps and np.abs(sum_y) < eps:
+            return field
+        qx = np.angle(sum_x) / (2 * np.pi * dx)
+        qy = np.angle(sum_y) / (2 * np.pi * dx)
 
         ny, nx = field.shape
         x = (np.arange(nx) - nx // 2) * dx
@@ -233,7 +242,7 @@ class MicroPtycho:
             V_k = self.potentials[k]
             T_k = self.transmission_function(V_k, interaction_constant)
             psi *= T_k
-            psi = np.fft.ifft2(np.fft.fft2(psi) * self.fresnel_propagator(KX, KY, dz=dz))
+            psi = np.fft.ifft2(np.fft.fft2(psi) * self.fresnel_propagator(KX, KY, dz=dz, lam=self.wavelength))
         return psi
 
     def propagate(self, potential, input_wavefunction, KX=None, KY=None,
@@ -245,7 +254,7 @@ class MicroPtycho:
         psi = input_wavefunction.copy()
         T_k = self.transmission_function(potential, interaction_constant)
         psi *= T_k
-        psi = np.fft.ifft2(np.fft.fft2(psi) * self.fresnel_propagator(KX, KY, dz=dz))
+        psi = np.fft.ifft2(np.fft.fft2(psi) * self.fresnel_propagator(KX, KY, dz=dz, lam=self.wavelength))
         return psi
 
     # ------------------------------------------------------------------ #
