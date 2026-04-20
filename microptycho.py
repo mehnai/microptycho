@@ -185,10 +185,17 @@ class MicroPtycho:
             return field
         F = np.fft.fftshift(np.fft.fft2(field))
         weight = np.abs(F) ** 2
+        ny, nx = field.shape
+        # Even-N FFT grids include the negative Nyquist but not the positive
+        # one, so Σ k·|F|² is not exactly zero for real-valued signals due to
+        # that unpaired bin. Drop the Nyquist row/column before the moment.
+        if nx % 2 == 0:
+            weight[:, 0] = 0.0
+        if ny % 2 == 0:
+            weight[0, :] = 0.0
         total = np.sum(weight)
         if total < eps:
             return field
-        ny, nx = field.shape
         kx = np.fft.fftshift(np.fft.fftfreq(nx, dx))
         ky = np.fft.fftshift(np.fft.fftfreq(ny, dx))
         KX, KY = np.meshgrid(kx, ky)
