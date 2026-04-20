@@ -170,24 +170,31 @@ class MicroPtycho:
     def _remove_phase_ramp(field, dx, eps=1e-12):
         """Remove the best-fit linear phase ramp from a complex field.
 
-        Uses the standard maximum-likelihood momentum estimator:
-            q_x = arg( Σ  ψ(x+dx) · ψ*(x) ) / (2π dx)
-        Summing the complex products before taking the angle avoids the
-        phase-wrapping / random-phase-tail issues that break a naive
-        weighted mean of angle(·) values.
+        Uses a Fourier-moment k-centroid estimator:
+            q_hat = Σ k · |F(P)(k)|² / Σ |F(P)(k)|²
+        A linear phase ramp exp(i 2π q·r) in real space is a rigid shift
+        of |F(P)|² in k-space, so the centroid is well-defined, wrap-free,
+        and robust to strongly-aberrated probes where local phase
+        gradients wrap over ±π within a single pixel (which biases naive
+        finite-difference estimators such as angle(P(r+dx)·P*(r))).
+
+        Matches the approach used by PyNX's `ZeroPhaseRamp` and
+        PSI's fold_slice probe recentering.
         """
         if field.size == 0:
             return field
-        dx_prod = field[:, 1:] * np.conj(field[:, :-1])
-        dy_prod = field[1:, :] * np.conj(field[:-1, :])
-        sum_x = np.sum(dx_prod)
-        sum_y = np.sum(dy_prod)
-        if np.abs(sum_x) < eps and np.abs(sum_y) < eps:
+        F = np.fft.fftshift(np.fft.fft2(field))
+        weight = np.abs(F) ** 2
+        total = np.sum(weight)
+        if total < eps:
             return field
-        qx = np.angle(sum_x) / (2 * np.pi * dx)
-        qy = np.angle(sum_y) / (2 * np.pi * dx)
-
         ny, nx = field.shape
+        kx = np.fft.fftshift(np.fft.fftfreq(nx, dx))
+        ky = np.fft.fftshift(np.fft.fftfreq(ny, dx))
+        KX, KY = np.meshgrid(kx, ky)
+        qx = np.sum(KX * weight) / total
+        qy = np.sum(KY * weight) / total
+
         x = (np.arange(nx) - nx // 2) * dx
         y = (np.arange(ny) - ny // 2) * dx
         X, Y = np.meshgrid(x, y)
@@ -402,7 +409,13 @@ class MicroPtycho:
         residuals = []
         probe_KX, probe_KY = MicroPtycho.make_k_grid(initial_probe.shape, dx)
         eps = 1e-12
-        target_probe_energy = np.sum(np.abs(initial_probe)**2)
+        # Target probe energy is derived from the measured data via Parseval's
+        # theorem: Σ|FFT(ψ)|² = N² · Σ|ψ|² = N² · Σ|P|² · ⟨|O|²⟩ ≈ N² · Σ|P|²
+        # for an |O|≈1 object. Using Σ|initial_probe|² here would lock in any
+        # noise injected into the initial probe guess (PyNX and fold_slice
+        # derive the target from data for the same reason).
+        patch_pixels = initial_probe.shape[0] * initial_probe.shape[1]
+        target_probe_energy = float(np.mean(np.sum(intensity, axis=(-2, -1))) / patch_pixels)
         measured_amplitude = np.sqrt(np.maximum(intensity, 0.0))
 
         for i in range(n_iter):
@@ -488,7 +501,10 @@ class MicroPtycho:
         residuals = []
         probe_KX, probe_KY = self.make_k_grid(probe.shape, dx)
         eps = 1e-12
-        target_probe_energy = np.sum(np.abs(probe)**2)
+        # See ePIE: target probe energy is derived from measured data via
+        # Parseval, not from the (possibly noisy) initial probe.
+        patch_pixels = probe.shape[0] * probe.shape[1]
+        target_probe_energy = float(np.mean(np.sum(intensity, axis=(-2, -1))) / patch_pixels)
         measured_amplitude = np.sqrt(np.maximum(intensity, 0.0))
 
         for i in range(n_iter):
