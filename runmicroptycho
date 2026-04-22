@@ -4,6 +4,6 @@ set -euo pipefail
 
 git pull
 
-python3 tutorial.py
+python -u tutorial.py
 
-python3 -m http.server 9000
+python -u -m http.server 9000
