@@ -641,7 +641,10 @@ class MicroPtycho:
             if beta != 0 and probe_fourier_support is not None:
                 probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
-            if normalize_probe and beta != 0:
+            # Amplitude-locked Fourier projection fixes the probe's total
+            # energy to sum(|template|²)/N² by Parseval, so a separate
+            # normalize step would fight the lock each iter. Skip it.
+            if normalize_probe and beta != 0 and probe_fourier_support is None:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
 
             if beta != 0 and remove_probe_phase_ramp:
@@ -650,6 +653,12 @@ class MicroPtycho:
                 # because it leaves all diffraction patterns unchanged. Removing it each epoch
                 # prevents the object from accumulating a compensating phase ramp.
                 probe = self._remove_phase_ramp(probe, dx=dx, eps=eps)
+                # After phase-ramp removal, re-lock |F(probe)| to template
+                # (the ramp removal is an in-real-space phase shift, which
+                # doesn't change |F(probe)| in principle, but a fractional
+                # real-space shift does alter the discrete |F| slightly).
+                if probe_fourier_support is not None:
+                    probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
             residuals.append(iter_residual)
             if verbose:

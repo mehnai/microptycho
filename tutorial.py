@@ -58,7 +58,7 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "n_iter": 100,          # ePIE iterations (sparse samples need more)
+    "n_iter": 300,          # ePIE iterations (joint probe+object)
     "voltage": 200e3,       # beam voltage (V)
     # --- sample knobs ------------------------------------------------------
     "nx": 6,                # unit cells along x
@@ -444,21 +444,27 @@ step(f"Initialising reconstruction ({n_slices} slices, flat object prior)...")
 n_slices = O_true.shape[0]
 O_init = np.ones_like(O_true)
 
-# Build the probe-aperture Fourier mask. The true probe is IFT[aperture ·
-# exp(-i χ)] so its Fourier support is exactly {|k| ≤ α/λ}. Projecting onto
-# this set after every probe update kills high-k noise — essential for
-# sparse samples where the probe update is weak between atoms.
-_kx_probe = np.fft.fftfreq(patch_size, mp.dx)
-_KXp, _KYp = np.meshgrid(_kx_probe, _kx_probe)
-_kmax = scope.alpha / scope.wavelength
-probe_fourier_support = (np.sqrt(_KXp**2 + _KYp**2) <= _kmax).astype(np.complex128)
+# ---- Probe Fourier-amplitude template ----
+# Experimentally, |F(probe)| is measured from a *vacuum* diffraction
+# pattern — one scan position with no sample, so the detector records
+# |F(probe)|². This is a routine STEM calibration step and requires no
+# knowledge of aberrations χ(k) (it uses probe amplitude only). In this
+# simulation we reproduce that by computing |F(probe_patch_true)|. The
+# aberration *phase* χ(k) is still unknown to the algorithm — only the
+# amplitude is.
+probe_fourier_support = np.abs(np.fft.fft2(probe_patch))
 
-# Probe init: start from the *true aberrated* probe patch. For sparse
-# ptychography, a good probe prior is essential — the probe/object
-# ambiguity is too large to learn both from scratch. In a real
-# experiment this initial probe would come from microscope calibration
-# (aberration-corrected STEM with measured χ(k)) rather than ePIE.
-probe_init = probe_patch.copy()
+# Probe init: start from the *ideal* (unaberrated) probe patch. ePIE
+# will then refine the phase inside the aperture to recover χ(k). With
+# the amplitude template above, the probe cannot absorb object features
+# (which would need amplitude changes); it can only move phase.
+_ideal_patch_hp = patch_size // 2
+_c = mp.N // 2
+probe_ideal_patch = np.fft.fftshift(probe_ideal)[
+    _c - _ideal_patch_hp: _c + _ideal_patch_hp,
+    _c - _ideal_patch_hp: _c + _ideal_patch_hp,
+].copy()
+probe_init = probe_ideal_patch.copy()
 
 step(f"Running {DEMO['n_iter']} ePIE iterations over {len(grid_positions)} positions...")
 probe_recon, O_recon, residuals = mp.multislice_ePIE(
@@ -470,23 +476,21 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    # For sparse samples the probe/object ambiguity is severe. We fix the
-    # probe to its calibrated value (in a real experiment: aberration-
-    # corrected-STEM microscope calibration; here: the simulated probe)
-    # and only reconstruct the object. Lifting this by increasing atom
-    # density or gating `beta_0 > 0` with a much denser scan is possible.
-    alpha_0=0.3,
-    beta_0=0.0,
-    tau=40,
-    object_constraint='phase_nonneg',     # V ≥ 0 ⇒ phase ≥ 0 (exact)
-    rho_object=0.3,
+    # Joint probe+object reconstruction.  The amplitude-locked Fourier
+    # aperture collapses the probe to one-phase-per-k-bin, so probe
+    # update cannot absorb object features. Warmup lets the object
+    # settle first (otherwise probe tries to explain a random O).
+    alpha_0=3.0,                           # push hard: object contribution
+                                           #   to residual is small (probe
+                                           #   dominates), needs aggressive
+                                           #   updates to converge
+    beta_0=0.2,                            # amplitude-locked → probe can
+                                           #   only learn phase (χ)
+    tau=80,                                # keep alpha high longer
+    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
+    rho_object=0.05,                       # minimal Tikhonov damping
     rho_probe=0.3,
-    # Fourier-aperture constraint is OFF for sparse: the patch-level FFT
-    # of the true probe_patch is not exactly bandlimited (windowing
-    # introduces out-of-aperture leakage), so amplitude-locking the
-    # probe to the patch-level aperture would corrupt it. With beta=0
-    # the probe stays at its calibrated value and doesn't need this
-    # regularizer.
+    probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,
     random_seed=7,
 )
@@ -546,7 +550,7 @@ axes[1, 1].imshow(np.angle(probe_recon_aligned), cmap='twilight', extent=extent,
 axes[1, 1].set_title('Reconstructed probe — phase')
 axes[1, 1].set_xlabel('x (Å)')
 
-plt.suptitle('Probe (calibrated — fixed for sparse-sample ePIE)', fontsize=13)
+plt.suptitle('Probe Reconstruction (ideal init → aberrated probe)', fontsize=13)
 plt.tight_layout()
 save("15_probe_reconstruction.png")
 
