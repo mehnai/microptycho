@@ -30,48 +30,67 @@ To add a new structure: update `ATOMS_PER_CELL`, `MIN_IN_PLANE_SPACING_FRAC`,
 and `ROWS_PER_CELL_AXIS` dicts at the top of `tutorial.py`, and add a
 `_<name>_unit_cell` to `CrystalMaker`.
 
-## Sparse-sample ePIE (the 36-atom demo)
+## Sparse multislice ePIE (the 36-atom demo) — BOTH probe and object
 
-Lessons the hard way:
+**Multislice ptychography by definition reconstructs both probe AND
+object.** Do not fix the probe. The demo reconstructs them jointly
+starting from `χ(k) = 0` (no aberration prior).
 
-- **Probe-object degeneracy is severe when atoms are sparse.** With a
-  concentrated ~1 Å probe and 14 Å atom spacing, neighbouring probe
-  positions share almost no illumination of the same atoms, so the probe
-  can absorb object features and vice versa. `phase_only` alone doesn't
-  break this — both reconstructions are still |·|=1, phase-free.
-- **Default strategy: fix the probe to its calibrated value
-  (`beta_0=0`) and only reconstruct the object.** This is what a real
-  aberration-corrected STEM does anyway — χ(k) is measured during
-  alignment, not during acquisition. In the sim we reuse
-  `probe_patch = mp.extract_probe_patch(...)` directly. Residual drops
-  cleanly and monotonically, and the 6×6 atom grid reconstructs at the
-  correct positions with the correct phase magnitudes.
-- **Use `object_constraint='phase_nonneg'`** whenever `O = exp(i·σ·V)`
-  with `V ≥ 0` (Gaussian atoms from `create_potentials`). It projects
-  onto `|O|=1 ∧ phase≥0` — strictly tighter than `phase_only`, and
-  exact by construction. Added to `_apply_object_constraint` in
-  `microptycho.py`.
-- **Jitter the scan grid.** A perfectly regular raster aliases with
-  the atom lattice and produces a moiré pattern — the reconstruction
-  shows dots at scan positions, not atom positions. Add
-  `±scan_step/3` uniform jitter to break the symmetry.
-- **Dense scanning helps**: `scan_step ≤ ¼·in-plane-spacing`, not the
-  usual ~0.7× probe diameter. Each atom needs multiple probe
-  placements for ePIE to triangulate it.
-- **Fourier-aperture probe projection (`probe_fourier_support`,
-  `_project_probe_to_aperture`) is implemented but OFF in the sparse
-  demo** because the patch-level FFT of the extracted probe is not
-  exactly bandlimited (windowing leaks high-k), so amplitude-locking
-  corrupts the calibrated probe. Turn it on when `beta_0 > 0` AND the
-  probe patch is large enough that windowing is negligible
-  (`patch_size ≫ probe_FWHM`).
+Prior knowledge required:
+- `α` (convergence semi-angle) and `λ` (= voltage). Microscope
+  settings; always known.
+- `|F(probe_patch)|` — the probe's Fourier-amplitude envelope. In a
+  real experiment this is a **vacuum diffraction pattern**: scan one
+  position with no sample and the detector records `|F(probe)|²`. A
+  routine STEM calibration step that contains no aberration info,
+  since aberrations are pure phase `exp(-iχ)` with `|·|=1`.
+
+What ePIE learns from scratch:
+- The aberration phase `χ(k)` inside the aperture (defocus `C1`,
+  astigmatism `A1`, coma `B2`, `Cs`, ...)
+- The full object `O(r)`
+
+Regularizers that make this work for sparse data:
+
+- **Amplitude-locked Fourier-aperture projection.** Pass
+  `probe_fourier_support = |F(probe_patch)|` to `multislice_ePIE`. The
+  helper `_project_probe_to_aperture` enforces `F(probe) = template ·
+  exp(iφ(k))` after every probe update — only the phase inside the
+  aperture is free. That's exactly `sum(aperture)` real DoFs (one phase
+  per k-bin), and those phases *are* χ(k). With this on, the probe
+  cannot absorb object features (which would require amplitude
+  changes). `normalize_probe` is auto-skipped when this is on (it would
+  fight the lock each epoch).
+- **`object_constraint='phase_nonneg'`** — for `O = exp(i·σ·V)` with
+  `V ≥ 0` this is physically exact (`|O|=1 ∧ phase≥0`). Strictly tighter
+  than `phase_only`; kills the phase-sign ambiguity that produces
+  random "negative atom" artefacts.
+- **Scan jitter** — a perfectly regular raster aliases with the atom
+  lattice into a moiré pattern. Add `±scan_step/3` uniform jitter.
+- **Dense scanning** — `scan_step ≤ ¼·in-plane-spacing` (not the usual
+  ~0.7× probe diameter). Each atom needs multiple probe placements.
+- **Aggressive `alpha_0`** — the probe dominates the diffraction
+  pattern for sparse samples, so the *object's contribution* to residual
+  is small. In the 36-atom demo, going from identity-O to true-O drops
+  residual from ~44 to 0 while going from ideal-probe to true-probe
+  drops it from ~1280 to ~44 — object is 3% of probe's signal. Object
+  updates therefore have weak per-position gradients; push `alpha_0` to
+  ~2–3 with low `rho_object` (~0.05) so the object actually moves.
+- **`probe_warmup_iters=0`** — with amplitude-lock, the probe cannot
+  damage itself, so no warmup needed. The probe can update from iter 1.
+
+Tutorial defaults that produce clean joint convergence on 36 atoms:
+`alpha_0=3.0, beta_0=0.2, tau=80, rho_object=0.05, rho_probe=0.3,
+object_constraint='phase_nonneg', probe_fourier_support=|F(probe_patch)|,
+n_iter=300`. Residual drops cleanly 48 → 22 with no oscillation; both
+the 6×6 atom grid (correct phase magnitude, correct positions) and the
+aberration rings in the probe phase are visible.
 
 Other `multislice_ePIE` knobs worth knowing: `alpha_0`, `beta_0` (step
 sizes), `tau` (decay), `rho_object`, `rho_probe` (Tikhonov-like
-denominator terms, defaults 0.2), `normalize_probe` (Parseval-based
-probe-energy pin), `remove_probe_phase_ramp` (removes the probe-tilt vs
-object-ramp gauge), `probe_warmup_iters` (keep probe fixed for the
-first N iters).
+denominator terms), `normalize_probe` (Parseval-based probe-energy pin;
+auto-skipped when aperture lock is on), `remove_probe_phase_ramp`
+(removes the probe-tilt vs object-ramp gauge).
 
 ## ePIE regularization (`microptycho.py`)
 
