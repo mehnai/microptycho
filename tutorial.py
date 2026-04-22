@@ -95,7 +95,7 @@ mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"])
 print(f"  Grid: {mp.N}x{mp.N}, pixel size = {mp.dx} Å")
 
 step(f"Projecting atoms onto slices (dz={DEMO['dz']} Å)...")
-V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"])
+V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=2.0)
 mp.set_potentials(V)
 print(f"  Potentials: {V.shape[0]} slices of {V.shape[1]}x{V.shape[2]} px")
 print(f"  Value range: [{V.min():.4f}, {V.max():.4f}]")
