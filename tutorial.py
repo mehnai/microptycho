@@ -84,22 +84,23 @@ print("  Note: MicroPtycho uses V_nm units by default.")
 section("Step 1: Build GaAs crystal and generate projected potentials")
 step("Tiling GaAs supercell (diamond structure, a=5.65 Å)...")
 
-# Toy zincblende at a=8 Å (1.4x real GaAs): enough room between the Ga-As
-# dumbbell atoms (bond ≈ a·√3/4 ≈ 3.5 Å) to render each atom as a big
-# resolved Gaussian at sigma=1.2, rather than merging into a checkerboard.
+# FCC (single-species, [001] projection) with a=8 Å and sigma=2.5 Å.
+# FCC projects onto a square grid with spacing a/2=4 Å, giving
+# sigma/spacing ≈ 0.62 — large atoms that nearly touch, matching the
+# "big circular blobs with dark channels" look of real STEM images.
 a_lat = 8.0
 fov = DEMO["N"] * DEMO["dx"]
 n_tile = int(np.ceil(fov / a_lat)) + 1
-cm = CrystalMaker(lattice_constant=a_lat, Z1=31, Z2=33, structure='diamond')
+cm = CrystalMaker(lattice_constant=a_lat, Z1=31, structure='fcc')
 cm.tile(nx=n_tile, ny=n_tile, nz=5)
-print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å (toy)")
+print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å (toy FCC)")
 
 step("Initialising simulation grid...")
 mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"])
 print(f"  Grid: {mp.N}x{mp.N}, pixel size = {mp.dx} Å")
 
 step(f"Projecting atoms onto slices (dz={DEMO['dz']} Å)...")
-V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=1.2)
+V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=2.5)
 mp.set_potentials(V)
 print(f"  Potentials: {V.shape[0]} slices of {V.shape[1]}x{V.shape[2]} px")
 print(f"  Value range: [{V.min():.4f}, {V.max():.4f}]")
