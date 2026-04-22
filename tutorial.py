@@ -50,7 +50,7 @@ print("  Output folder: testrun/")
 
 rng = np.random.default_rng(7)
 DEMO = {
-    "N": 128,               # simulation grid size
+    "N": 256,               # simulation grid size
     "dx": 0.43,             # Å per pixel
     "dz": 20.0,             # Å slice spacing (well below depth resolution λ/α² ≈ 250 Å)
     "patch_size": 24,       # ptychography patch (pixels)

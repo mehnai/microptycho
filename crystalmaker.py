@@ -68,7 +68,7 @@ class CrystalMaker:
             [a/2,   a/2,   a/2,   Z],
         ])
 
-    def tile(self, nx=20, ny=20, nz=40):
+    def tile(self, nx=5, ny=5, nz=10):
         tiled = []
         for i in range(nx):
             for j in range(ny):
@@ -123,43 +123,43 @@ class CrystalMaker:
     # ---- convenience constructors ----
 
     @classmethod
-    def silicon(cls, nx=20, ny=20, nz=40):
+    def silicon(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=5.43, Z1=14)
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def gallium_arsenide(cls, nx=20, ny=20, nz=40):
+    def gallium_arsenide(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=5.65, Z1=31, Z2=33)
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def copper(cls, nx=20, ny=20, nz=40):
+    def copper(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=3.61, Z1=29, structure='fcc')
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def aluminum(cls, nx=20, ny=20, nz=40):
+    def aluminum(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=4.05, Z1=13, structure='fcc')
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def gold(cls, nx=20, ny=20, nz=40):
+    def gold(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=4.08, Z1=79, structure='fcc')
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def iron(cls, nx=20, ny=20, nz=40):
+    def iron(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=2.87, Z1=26, structure='bcc')
         cm.tile(nx, ny, nz)
         return cm
 
     @classmethod
-    def tungsten(cls, nx=20, ny=20, nz=40):
+    def tungsten(cls, nx=5, ny=5, nz=10):
         cm = cls(lattice_constant=3.16, Z1=74, structure='bcc')
         cm.tile(nx, ny, nz)
         return cm
