@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+git pull
+
+python -u tutorial.py
+
+python -u -m http.server 9000
