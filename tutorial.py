@@ -49,15 +49,91 @@ print("=" * 60)
 print("  Output folder: testrun/")
 
 rng = np.random.default_rng(7)
+
+# ---------------------------------------------------------------------------
+# High-level demo knobs. The derived quantities below (a_lat, sigma,
+# scan_range, patch_size, dz) are all computed from these so the demo scales
+# cleanly from a *sparse* 36-atom sample to a dense thousands-of-atoms sample.
+# ---------------------------------------------------------------------------
 DEMO = {
-    "N": 256,               # simulation grid size
+    "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "dz": 20.0,             # Å slice spacing (well below depth resolution λ/α² ≈ 250 Å)
-    "patch_size": 24,       # ptychography patch (pixels)
     "n_iter": 50,           # ePIE iterations
-    "scan_range": 44,       # Å (must keep probe patch inside object: <= (N/2 - patch_size/2)*dx)
+    "voltage": 200e3,       # beam voltage (V)
+    # --- sample knobs ------------------------------------------------------
+    "nx": 6,                # unit cells along x
+    "ny": 6,                # unit cells along y
+    "nz": 1,                # unit cells along z (=> n_slices for sc)
+    "structure": "sc",      # 'sc' | 'bcc' | 'fcc' | 'diamond'
+    "Z1": 31,               # atomic number (amplitude weight)
+    # --- derived knobs (None → auto) --------------------------------------
+    "sample_fill": 0.7,     # fraction of FOV the sample should span
+    "sigma_frac": 0.30,     # sigma / in-plane spacing (atom visual size)
+    "scan_fill": 0.8,       # fraction of sample span the scan covers
+    "patch_min_A": 20.0,    # minimum probe-patch size in Å
 }
-print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']}Å, {DEMO['n_iter']} ePIE iterations")
+
+# ---- Structures: atoms/unit-cell and min in-plane spacing as fraction of a
+#      (used to compute a sensible Gaussian sigma and a_lat from the knobs).
+ATOMS_PER_CELL = {"sc": 1, "bcc": 2, "fcc": 4, "diamond": 8}
+MIN_IN_PLANE_SPACING_FRAC = {"sc": 1.0, "bcc": 0.707, "fcc": 0.5, "diamond": 0.354}
+# How many atom rows a cell contributes along a crystal axis in [001] projection
+ROWS_PER_CELL_AXIS = {"sc": 1, "bcc": 1, "fcc": 2, "diamond": 4}
+
+# ---- Derive everything from the knobs --------------------------------------
+_structure = DEMO["structure"]
+_fov = DEMO["N"] * DEMO["dx"]
+_n_atoms_side = max(DEMO["nx"], DEMO["ny"]) * ROWS_PER_CELL_AXIS[_structure]
+
+# Solve jointly so sample-span + probe-patch ≤ margin·FOV. The probe patch
+# is set to ~2× the in-plane atom spacing (so each probe position touches
+# several atoms) but no smaller than `patch_min_A`.
+_margin = 0.9
+_patch_min = DEMO["patch_min_A"]
+# Case A: patch clamps to 2·spacing →  (n+1)·spacing ≤ margin·FOV
+_spacing_A = _margin * _fov / (_n_atoms_side + 1)
+if 2 * _spacing_A >= _patch_min:
+    _in_plane_spacing = _spacing_A
+    _patch_A = 2 * _spacing_A
+else:
+    # Case B: patch clamps to patch_min → (n-1)·spacing = margin·FOV - patch_min
+    _in_plane_spacing = max(
+        (_margin * _fov - _patch_min) / max(_n_atoms_side - 1, 1),
+        0.5,
+    )
+    _patch_A = _patch_min
+
+a_lat = _in_plane_spacing / MIN_IN_PLANE_SPACING_FRAC[_structure]
+atom_sigma = DEMO["sigma_frac"] * _in_plane_spacing
+
+# Slice spacing: one slice per atomic layer in z (thin enough vs λ/α² depth
+# resolution so multislice and single-slice agree for dz ≪ λ/α²).
+dz = a_lat
+n_slices_expected = DEMO["nz"]
+n_atoms_total = DEMO["nx"] * DEMO["ny"] * DEMO["nz"] * ATOMS_PER_CELL[_structure]
+
+patch_size = int(np.ceil(_patch_A / DEMO["dx"] / 2.0) * 2)
+
+# Scan range: cover the atoms, but stay inside the patch-safe region
+# (|scan_pos| + patch_half ≤ N·dx/2).
+_sample_half_span = (_n_atoms_side - 1) / 2.0 * _in_plane_spacing
+_scan_max = (DEMO["N"] / 2 - patch_size / 2) * DEMO["dx"]
+scan_range = min(
+    DEMO["scan_fill"] * _sample_half_span + _in_plane_spacing,
+    0.98 * _scan_max,
+)
+
+# Scan step: half the in-plane spacing (gives dense probe overlap on atoms).
+scan_step = max(0.5 * _in_plane_spacing, 2 * DEMO["dx"])
+
+print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']} Å, FOV={_fov:.1f} Å")
+print(f"  Sample: {DEMO['nx']}×{DEMO['ny']}×{DEMO['nz']} {_structure} cells "
+      f"→ {n_atoms_total} atoms")
+print(f"  Derived: a_lat={a_lat:.2f} Å, spacing={_in_plane_spacing:.2f} Å, "
+      f"σ={atom_sigma:.2f} Å, dz={dz:.2f} Å")
+print(f"           patch_size={patch_size}px ({patch_size*DEMO['dx']:.1f} Å), "
+      f"scan_range=±{scan_range:.1f} Å, step={scan_step:.2f} Å")
+print(f"  ePIE iterations: {DEMO['n_iter']}")
 
 
 # ---------------------------------------------------------------------------
@@ -81,26 +157,21 @@ print("  Note: MicroPtycho uses V_nm units by default.")
 # ---------------------------------------------------------------------------
 # Step 1: Build crystal and generate projected potentials
 # ---------------------------------------------------------------------------
-section("Step 1: Build GaAs crystal and generate projected potentials")
-step("Tiling GaAs supercell (diamond structure, a=5.65 Å)...")
+section(f"Step 1: Build {_structure} crystal ({n_atoms_total} atoms) "
+        f"and generate projected potentials")
+step(f"Tiling {_structure} supercell (a={a_lat:.2f} Å)...")
 
-# FCC (single-species, [001] projection) with a=8 Å and sigma=2.5 Å.
-# FCC projects onto a square grid with spacing a/2=4 Å, giving
-# sigma/spacing ≈ 0.62 — large atoms that nearly touch, matching the
-# "big circular blobs with dark channels" look of real STEM images.
-a_lat = 8.0
-fov = DEMO["N"] * DEMO["dx"]
-n_tile = int(np.ceil(fov / a_lat)) + 1
-cm = CrystalMaker(lattice_constant=a_lat, Z1=31, structure='fcc')
-cm.tile(nx=n_tile, ny=n_tile, nz=5)
-print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å (toy FCC)")
+cm = CrystalMaker(lattice_constant=a_lat, Z1=DEMO["Z1"], structure=_structure)
+cm.tile(nx=DEMO["nx"], ny=DEMO["ny"], nz=DEMO["nz"])
+print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  "
+      f"lattice constant: {cm.lattice_constant} Å ({_structure})")
 
 step("Initialising simulation grid...")
-mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"])
+mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"], voltage=DEMO["voltage"])
 print(f"  Grid: {mp.N}x{mp.N}, pixel size = {mp.dx} Å")
 
-step(f"Projecting atoms onto slices (dz={DEMO['dz']} Å)...")
-V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=2.5)
+step(f"Projecting atoms onto slices (dz={dz:.2f} Å, σ={atom_sigma:.2f} Å)...")
+V = cm.create_potentials(mp.X, mp.Y, dz=dz, sigma=atom_sigma)
 mp.set_potentials(V)
 print(f"  Potentials: {V.shape[0]} slices of {V.shape[1]}x{V.shape[2]} px")
 print(f"  Value range: [{V.min():.4f}, {V.max():.4f}]")
@@ -157,7 +228,7 @@ section("Step 2: Microscope with aberrations")
 step("Constructing aberrated microscope (C1=100Å, A1=50Å, B2=80Å, Cs=1mm)...")
 
 scope = Microscope(
-    voltage=200e3,
+    voltage=DEMO["voltage"],
     alpha=0.010,
     C1=100.0,
     A1=50.0,
@@ -186,23 +257,23 @@ step("Plotting probe, aberration function, and CTF...")
 scope.plot_probe(N=mp.N, dx=mp.dx, patch_size=48)
 save("03_probe.png")
 
-scope.plot_aberration_function(N=256, dx=0.43)
+scope.plot_aberration_function(N=mp.N, dx=mp.dx)
 save("04_aberration_function.png")
 
-scope.plot_ctf(N=256, dx=0.43)
+scope.plot_ctf(N=mp.N, dx=mp.dx)
 save("05_ctf.png")
 
-scope.plot_ctf_1d(N=256, dx=0.43)
+scope.plot_ctf_1d(N=mp.N, dx=mp.dx)
 save("06_ctf_1d.png")
 
 step("Constructing ideal and aberrated probes for comparison...")
-scope_ideal = Microscope(voltage=200e3, alpha=scope.alpha)
+scope_ideal = Microscope(voltage=DEMO["voltage"], alpha=scope.alpha)
 probe_ideal = scope_ideal.construct_probe(N=mp.N, dx=mp.dx)
 probe_aberrated = scope.construct_probe_for(mp)
 
-patch_size = 48
+vis_patch_size = 48
 c = mp.N // 2
-hp = patch_size // 2
+hp = vis_patch_size // 2
 extent = np.array([-hp, hp, -hp, hp]) * mp.dx
 
 ideal_patch = np.fft.fftshift(probe_ideal)[c-hp:c+hp, c-hp:c+hp]
@@ -240,13 +311,13 @@ aberrations = [
 ]
 
 fig, axes = plt.subplots(2, 5, figsize=(18, 7))
-patch_size = 48
+gallery_patch_size = 48
 c = mp.N // 2
-hp = patch_size // 2
+hp = gallery_patch_size // 2
 extent = np.array([-hp, hp, -hp, hp]) * mp.dx
 
 for col, (label, params) in enumerate(aberrations):
-    s = Microscope(voltage=200e3, alpha=scope.alpha, **params)
+    s = Microscope(voltage=DEMO["voltage"], alpha=scope.alpha, **params)
     p = s.construct_probe(N=mp.N, dx=mp.dx)
     patch = np.fft.fftshift(p)[c-hp:c+hp, c-hp:c+hp]
     axes[0, col].imshow(np.abs(patch)**2, cmap='hot', extent=extent)
@@ -266,8 +337,8 @@ save("08_aberration_gallery.png")
 section("Step 3: Multislice wave propagation")
 step("Propagating aberrated and ideal probes through the crystal...")
 
-exit_wave = mp.propagate_wavefunction(probe_aberrated, dz=DEMO["dz"])
-exit_wave_ideal = mp.propagate_wavefunction(probe_ideal, dz=DEMO["dz"])
+exit_wave = mp.propagate_wavefunction(probe_aberrated, dz=dz)
+exit_wave_ideal = mp.propagate_wavefunction(probe_ideal, dz=dz)
 print(f"  Exit wave shape: {exit_wave.shape}")
 
 fig, axes = plt.subplots(2, 3, figsize=(14, 8))
@@ -308,26 +379,26 @@ step("Constructing scan positions...")
 
 grid_positions = MicroPtycho.construct_scan_positions(
     scan_margin=0,
-    d_probe=2 * 0.86,
+    d_probe=scan_step / (1 - 0.3),  # invert step = d_probe*(1-overlap)
     overlap=0.3,
-    scan_range=DEMO["scan_range"],
+    scan_range=scan_range,
 )
-print(f"  Scan positions: {len(grid_positions)} (full object coverage)")
+print(f"  Scan positions: {len(grid_positions)} (scan_range=±{scan_range:.1f} Å, "
+      f"step={scan_step:.2f} Å)")
 
 mp.plot_scan_positions(grid_positions, probe_radius=0.86)
 save("10_scan_positions.png")
 
-patch_size = DEMO["patch_size"]
 probe_patch = mp.extract_probe_patch(patch_size=patch_size)
-print(f"  Probe patch shape: {probe_patch.shape}")
+print(f"  Probe patch shape: {probe_patch.shape} ({patch_size*mp.dx:.1f} Å wide)")
 depth_resolution = mp.wavelength / (scope.alpha**2)
-print(f"  Axial resolution estimate λ/α² ≈ {depth_resolution:.1f} Å (dz = {DEMO['dz']:.1f} Å)")
+print(f"  Axial resolution estimate λ/α² ≈ {depth_resolution:.1f} Å (dz = {dz:.1f} Å)")
 
 step("Building Fresnel propagation kernel...")
 fresnel_kernel = mp.make_fresnel_kernel(
     KX=np.fft.fftfreq(patch_size, mp.dx)[np.newaxis, :] * np.ones((patch_size, 1)),
     KY=np.fft.fftfreq(patch_size, mp.dx)[:, np.newaxis] * np.ones((1, patch_size)),
-    dz=DEMO["dz"],
+    dz=dz,
 )
 
 step(f"Generating diffraction patterns for {len(grid_positions)} scan positions...")
@@ -440,8 +511,11 @@ save("15_probe_reconstruction.png")
 probe_mse = np.mean(np.abs(probe_recon_aligned - probe_patch)**2)
 print(f"  Probe MSE: {probe_mse:.4e}")
 
-slices_to_compare = [0, n_slices // 2, n_slices - 1]
+slices_to_compare = sorted(set([0, n_slices // 2, n_slices - 1]))
 fig, axes = plt.subplots(2, len(slices_to_compare), figsize=(5 * len(slices_to_compare), 8))
+axes = np.atleast_2d(axes)
+if axes.shape[0] == 1:  # single-slice: subplots returns (2,) not (2,1)
+    axes = axes.reshape(2, 1)
 for col, s in enumerate(slices_to_compare):
     axes[0, col].imshow(np.angle(O_true[s]), cmap='twilight')
     axes[0, col].set_title(f'True — slice {s}')

@@ -12,7 +12,7 @@ class CrystalMaker:
     scattering.
     """
 
-    STRUCTURES = ('diamond', 'fcc', 'bcc')
+    STRUCTURES = ('diamond', 'fcc', 'bcc', 'sc')
 
     def __init__(self, lattice_constant=5.43, Z1=14, Z2=None, structure='diamond',
                  reference_atomic_number=14.0):
@@ -36,6 +36,8 @@ class CrystalMaker:
             return self._fcc_unit_cell(a, Z1)
         elif self.structure == 'bcc':
             return self._bcc_unit_cell(a, Z1)
+        elif self.structure == 'sc':
+            return self._sc_unit_cell(a, Z1)
 
     @staticmethod
     def _diamond_unit_cell(a, Z1, Z2):
@@ -66,6 +68,13 @@ class CrystalMaker:
         return np.array([
             [0,     0,     0,     Z],
             [a/2,   a/2,   a/2,   Z],
+        ])
+
+    @staticmethod
+    def _sc_unit_cell(a, Z):
+        """Simple cubic: 1 atom per unit cell. Useful for sparse toy lattices."""
+        return np.array([
+            [0,     0,     0,     Z],
         ])
 
     def tile(self, nx=5, ny=5, nz=10):

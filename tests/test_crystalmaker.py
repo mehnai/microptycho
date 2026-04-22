@@ -21,13 +21,24 @@ def test_bcc_unit_cell_has_2_atoms():
     assert cm.unit_cell.shape == (2, 4)
 
 
+def test_sc_unit_cell_has_1_atom():
+    cm = CrystalMaker(structure='sc')
+    assert cm.unit_cell.shape == (1, 4)
+
+
+def test_sc_tile_produces_nx_ny_nz_atoms():
+    cm = CrystalMaker(lattice_constant=10.0, Z1=14, structure='sc')
+    cm.tile(nx=6, ny=6, nz=1)
+    assert cm.supercell.shape == (36, 4)
+
+
 def test_invalid_structure_raises():
     with pytest.raises(ValueError):
         CrystalMaker(structure='hcp')
 
 
 def test_tile_atom_count_diamond():
-    cm = CrystalMaker.gallium_arsenide()
+    cm = CrystalMaker.gallium_arsenide(nx=20, ny=20, nz=40)
     assert cm.supercell.shape[0] == 8 * 20 * 20 * 40
 
 
