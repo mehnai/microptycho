@@ -84,7 +84,10 @@ print("  Note: MicroPtycho uses V_nm units by default.")
 section("Step 1: Build GaAs crystal and generate projected potentials")
 step("Tiling GaAs supercell (diamond structure, a=5.65 Å)...")
 
-cm = CrystalMaker.gallium_arsenide()
+fov = DEMO["N"] * DEMO["dx"]
+a_gaas = 5.65
+n_tile = int(np.ceil(fov / a_gaas)) + 1
+cm = CrystalMaker.gallium_arsenide(nx=n_tile, ny=n_tile, nz=10)
 print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å")
 
 step("Initialising simulation grid...")
