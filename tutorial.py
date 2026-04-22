@@ -55,7 +55,7 @@ DEMO = {
     "dz": 20.0,             # Å slice spacing (well below depth resolution λ/α² ≈ 250 Å)
     "patch_size": 24,       # ptychography patch (pixels)
     "n_iter": 50,           # ePIE iterations
-    "scan_range": 22,       # Å (must keep probe patch inside object: <= (N/2 - patch_size/2)*dx)
+    "scan_range": 44,       # Å (must keep probe patch inside object: <= (N/2 - patch_size/2)*dx)
 }
 print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']}Å, {DEMO['n_iter']} ePIE iterations")
 
@@ -85,8 +85,8 @@ section("Step 1: Build GaAs crystal and generate projected potentials")
 step("Tiling GaAs supercell (diamond structure, a=5.65 Å)...")
 
 a_gaas = 5.65
-probe_fov = DEMO["scan_range"] + DEMO["patch_size"] * DEMO["dx"]
-n_tile = int(np.ceil(probe_fov / a_gaas)) + 2
+fov = DEMO["N"] * DEMO["dx"]
+n_tile = int(np.ceil(fov / a_gaas)) + 1
 cm = CrystalMaker.gallium_arsenide(nx=n_tile, ny=n_tile, nz=5)
 print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å")
 
@@ -95,7 +95,7 @@ mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"])
 print(f"  Grid: {mp.N}x{mp.N}, pixel size = {mp.dx} Å")
 
 step(f"Projecting atoms onto slices (dz={DEMO['dz']} Å)...")
-V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=1.8)
+V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"])
 mp.set_potentials(V)
 print(f"  Potentials: {V.shape[0]} slices of {V.shape[1]}x{V.shape[2]} px")
 print(f"  Value range: [{V.min():.4f}, {V.max():.4f}]")
