@@ -369,7 +369,7 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     alpha_0=0.1,
     beta_0=0.1,
     tau=20,
-    object_constraint=None,
+    object_constraint='phase_only',
     random_seed=7,
 )
 
