@@ -84,10 +84,10 @@ print("  Note: MicroPtycho uses V_nm units by default.")
 section("Step 1: Build GaAs crystal and generate projected potentials")
 step("Tiling GaAs supercell (diamond structure, a=5.65 Å)...")
 
-fov = DEMO["N"] * DEMO["dx"]
 a_gaas = 5.65
-n_tile = int(np.ceil(fov / a_gaas)) + 1
-cm = CrystalMaker.gallium_arsenide(nx=n_tile, ny=n_tile, nz=10)
+probe_fov = DEMO["scan_range"] + DEMO["patch_size"] * DEMO["dx"]
+n_tile = int(np.ceil(probe_fov / a_gaas)) + 2
+cm = CrystalMaker.gallium_arsenide(nx=n_tile, ny=n_tile, nz=5)
 print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  lattice constant: {cm.lattice_constant} Å")
 
 step("Initialising simulation grid...")
@@ -95,7 +95,7 @@ mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"])
 print(f"  Grid: {mp.N}x{mp.N}, pixel size = {mp.dx} Å")
 
 step(f"Projecting atoms onto slices (dz={DEMO['dz']} Å)...")
-V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"])
+V = cm.create_potentials(mp.X, mp.Y, dz=DEMO["dz"], sigma=1.8)
 mp.set_potentials(V)
 print(f"  Potentials: {V.shape[0]} slices of {V.shape[1]}x{V.shape[2]} px")
 print(f"  Value range: [{V.min():.4f}, {V.max():.4f}]")
