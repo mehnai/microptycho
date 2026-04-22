@@ -87,6 +87,25 @@ class CrystalMaker:
         self.supercell = np.vstack(tiled)
         return self.supercell
 
+    def rotate_xy(self, angle_deg):
+        """Rotate the tiled supercell in the xy plane by `angle_deg`.
+
+        Used to verify that reconstruction is lattice-orientation
+        agnostic: the ePIE algorithm has no preferred axis, but a
+        regular raster scan + axis-aligned lattice is the one case
+        where moiré aliasing can occur. Rotating the lattice (or
+        jittering the scan) breaks that symmetry.
+        """
+        if self.supercell is None:
+            raise ValueError("Call tile() first.")
+        theta = np.deg2rad(angle_deg)
+        cos, sin = np.cos(theta), np.sin(theta)
+        x = self.supercell[:, 0].copy()
+        y = self.supercell[:, 1].copy()
+        self.supercell[:, 0] = cos * x - sin * y
+        self.supercell[:, 1] = sin * x + cos * y
+        return self.supercell
+
     def create_potentials(self, X, Y, dz=2.0, sigma=0.7, amplitude=10, center=True,
                           atomic_scale=True, save_path=None):
         if self.supercell is None:

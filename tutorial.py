@@ -66,6 +66,7 @@ DEMO = {
     "nz": 1,                # unit cells along z (=> n_slices for sc)
     "structure": "sc",      # 'sc' | 'bcc' | 'fcc' | 'diamond'
     "Z1": 31,               # atomic number (amplitude weight)
+    "rotation_deg": 45.0,   # in-plane lattice rotation (0 = axis-aligned)
     # --- derived knobs (None → auto) --------------------------------------
     "sample_fill": 0.7,     # fraction of FOV the sample should span
     "sigma_frac": 0.30,     # sigma / in-plane spacing (atom visual size)
@@ -85,20 +86,28 @@ _structure = DEMO["structure"]
 _fov = DEMO["N"] * DEMO["dx"]
 _n_atoms_side = max(DEMO["nx"], DEMO["ny"]) * ROWS_PER_CELL_AXIS[_structure]
 
+# Rotation factor: when the lattice is rotated by θ, the axis-aligned
+# bounding box of the atom positions grows by (|cos θ| + |sin θ|) along
+# each axis (max at θ=45° → √2). Account for this in the fitting so
+# rotated lattices still fit inside the scan-safe region.
+_rot_rad = np.deg2rad(DEMO.get("rotation_deg", 0.0))
+_rot_scale = abs(np.cos(_rot_rad)) + abs(np.sin(_rot_rad))
+_n_atoms_eff = 1 + (_n_atoms_side - 1) * _rot_scale  # effective side for fitting
+
 # Solve jointly so sample-span + probe-patch ≤ margin·FOV. The probe patch
 # is set to ~2× the in-plane atom spacing (so each probe position touches
 # several atoms) but no smaller than `patch_min_A`.
 _margin = 0.9
 _patch_min = DEMO["patch_min_A"]
-# Case A: patch clamps to 2·spacing →  (n+1)·spacing ≤ margin·FOV
-_spacing_A = _margin * _fov / (_n_atoms_side + 1)
+# Case A: patch clamps to 2·spacing → (n_eff+1)·spacing ≤ margin·FOV
+_spacing_A = _margin * _fov / (_n_atoms_eff + 1)
 if 2 * _spacing_A >= _patch_min:
     _in_plane_spacing = _spacing_A
     _patch_A = 2 * _spacing_A
 else:
-    # Case B: patch clamps to patch_min → (n-1)·spacing = margin·FOV - patch_min
+    # Case B: patch clamps to patch_min → (n_eff-1)·spacing = margin·FOV - patch_min
     _in_plane_spacing = max(
-        (_margin * _fov - _patch_min) / max(_n_atoms_side - 1, 1),
+        (_margin * _fov - _patch_min) / max(_n_atoms_eff - 1, 1),
         0.5,
     )
     _patch_A = _patch_min
@@ -115,8 +124,9 @@ n_atoms_total = DEMO["nx"] * DEMO["ny"] * DEMO["nz"] * ATOMS_PER_CELL[_structure
 patch_size = int(np.ceil(_patch_A / DEMO["dx"] / 2.0) * 2)
 
 # Scan range: cover the atoms, but stay inside the patch-safe region
-# (|scan_pos| + patch_half ≤ N·dx/2).
-_sample_half_span = (_n_atoms_side - 1) / 2.0 * _in_plane_spacing
+# (|scan_pos| + patch_half ≤ N·dx/2). Rotated lattice bounding box
+# grows by `_rot_scale` along each axis.
+_sample_half_span = (_n_atoms_side - 1) / 2.0 * _in_plane_spacing * _rot_scale
 _scan_max = (DEMO["N"] / 2 - patch_size / 2) * DEMO["dx"]
 scan_range = min(
     DEMO["scan_fill"] * _sample_half_span + _in_plane_spacing,
@@ -131,7 +141,7 @@ scan_step = max(0.25 * _in_plane_spacing, 2 * DEMO["dx"])
 
 print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']} Å, FOV={_fov:.1f} Å")
 print(f"  Sample: {DEMO['nx']}×{DEMO['ny']}×{DEMO['nz']} {_structure} cells "
-      f"→ {n_atoms_total} atoms")
+      f"→ {n_atoms_total} atoms, rotated {DEMO.get('rotation_deg', 0.0):.1f}°")
 print(f"  Derived: a_lat={a_lat:.2f} Å, spacing={_in_plane_spacing:.2f} Å, "
       f"σ={atom_sigma:.2f} Å, dz={dz:.2f} Å")
 print(f"           patch_size={patch_size}px ({patch_size*DEMO['dx']:.1f} Å), "
@@ -166,8 +176,11 @@ step(f"Tiling {_structure} supercell (a={a_lat:.2f} Å)...")
 
 cm = CrystalMaker(lattice_constant=a_lat, Z1=DEMO["Z1"], structure=_structure)
 cm.tile(nx=DEMO["nx"], ny=DEMO["ny"], nz=DEMO["nz"])
+if DEMO.get("rotation_deg", 0.0) != 0.0:
+    cm.rotate_xy(DEMO["rotation_deg"])
 print(f"  Supercell: {cm.supercell.shape[0]} atoms  |  "
-      f"lattice constant: {cm.lattice_constant} Å ({_structure})")
+      f"lattice constant: {cm.lattice_constant} Å ({_structure}) "
+      f"| rotation: {DEMO.get('rotation_deg', 0.0):.1f}°")
 
 step("Initialising simulation grid...")
 mp = MicroPtycho(N=DEMO["N"], dx=DEMO["dx"], voltage=DEMO["voltage"])

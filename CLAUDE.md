@@ -30,6 +30,13 @@ To add a new structure: update `ATOMS_PER_CELL`, `MIN_IN_PLANE_SPACING_FRAC`,
 and `ROWS_PER_CELL_AXIS` dicts at the top of `tutorial.py`, and add a
 `_<name>_unit_cell` to `CrystalMaker`.
 
+**Lattice rotation.** `DEMO['rotation_deg']` rotates the tiled supercell
+in the xy plane via `CrystalMaker.rotate_xy`. Default is 45° —
+deliberately off-axis to prove the reconstruction is lattice-orientation
+agnostic. The geometry derivation scales the effective side of the
+bounding box by `|cos θ| + |sin θ|` (→ √2 at 45°) so the rotated
+sample + probe patch still fits inside the scan-safe region.
+
 ## Sparse multislice ePIE (the 36-atom demo) — BOTH probe and object
 
 **Multislice ptychography by definition reconstructs both probe AND
