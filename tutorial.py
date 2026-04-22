@@ -363,9 +363,9 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    alpha_0=0.02,
-    beta_0=0.02,
-    tau=10,
+    alpha_0=0.1,
+    beta_0=0.1,
+    tau=20,
     object_constraint=None,
     random_seed=7,
 )
