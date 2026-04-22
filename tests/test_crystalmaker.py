@@ -32,6 +32,32 @@ def test_sc_tile_produces_nx_ny_nz_atoms():
     assert cm.supercell.shape == (36, 4)
 
 
+def test_rotate_xy_preserves_atom_count_and_distances():
+    cm = CrystalMaker(lattice_constant=10.0, Z1=14, structure='sc')
+    cm.tile(nx=4, ny=4, nz=1)
+    original = cm.supercell.copy()
+    # Pairwise xy distances must be preserved by rotation (rigid motion).
+    def pairwise(xy):
+        d = xy[:, None, :] - xy[None, :, :]
+        return np.sqrt((d ** 2).sum(-1))
+    cm.rotate_xy(45.0)
+    assert cm.supercell.shape == original.shape
+    np.testing.assert_allclose(
+        pairwise(cm.supercell[:, :2]),
+        pairwise(original[:, :2]),
+        atol=1e-10,
+    )
+    # z and atomic number untouched
+    np.testing.assert_array_equal(cm.supercell[:, 2], original[:, 2])
+    np.testing.assert_array_equal(cm.supercell[:, 3], original[:, 3])
+
+
+def test_rotate_xy_requires_tile():
+    cm = CrystalMaker(structure='sc')
+    with pytest.raises(ValueError):
+        cm.rotate_xy(45.0)
+
+
 def test_invalid_structure_raises():
     with pytest.raises(ValueError):
         CrystalMaker(structure='hcp')
