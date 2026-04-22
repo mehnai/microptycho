@@ -15,8 +15,14 @@
   ~8× while keeping the in-plane lattice pattern identical — prefer this over
   shrinking `nx, ny`, which would leave the FOV partially empty.
 - **`sigma`** in `create_potentials(..., sigma=...)` is atom Gaussian width in Å.
-  Default 0.7 keeps atoms distinct for GaAs (a=5.65 Å). Going much above ~1.0
-  merges adjacent atoms within a unit cell and destroys atomic contrast.
+  Rule of thumb: `sigma / nearest_neighbor_distance < ~0.4` keeps atoms visibly
+  resolved. In zincblende/diamond the nearest neighbour is the Ga-As bond =
+  `a·√3/4` (1.4 Å for real GaAs!) — not the unit cell `a`. So for real GaAs
+  anything above ~0.5 Å starts merging Ga-As dumbbells into a featureless
+  checkerboard. To get visually *big* atoms that still look crystalline,
+  use a toy lattice constant (e.g. `CrystalMaker(lattice_constant=8.0, ...)`
+  directly — the convenience constructors use real values) so the bond length
+  grows with sigma.
 
 ## ePIE regularization (`microptycho.py`)
 
