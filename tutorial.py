@@ -58,7 +58,7 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "n_iter": 50,           # ePIE iterations
+    "n_iter": 100,          # ePIE iterations (sparse samples need more)
     "voltage": 200e3,       # beam voltage (V)
     # --- sample knobs ------------------------------------------------------
     "nx": 6,                # unit cells along x
@@ -123,8 +123,11 @@ scan_range = min(
     0.98 * _scan_max,
 )
 
-# Scan step: half the in-plane spacing (gives dense probe overlap on atoms).
-scan_step = max(0.5 * _in_plane_spacing, 2 * DEMO["dx"])
+# Scan step: ≤¼ the in-plane spacing. For sparse samples dense scans are
+# crucial — each probe position only sees atoms strongly when it lands
+# near one, so oversample positions to cover every atom with several
+# probe placements.
+scan_step = max(0.25 * _in_plane_spacing, 2 * DEMO["dx"])
 
 print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']} Å, FOV={_fov:.1f} Å")
 print(f"  Sample: {DEMO['nx']}×{DEMO['ny']}×{DEMO['nz']} {_structure} cells "
@@ -383,8 +386,21 @@ grid_positions = MicroPtycho.construct_scan_positions(
     overlap=0.3,
     scan_range=scan_range,
 )
+# Jitter scan positions: a perfectly regular raster aliases with the atom
+# lattice in sparse ptychography, producing a moiré grid artifact in the
+# reconstruction. A uniform random shift of ±scan_step/3 breaks the
+# symmetry without hurting probe-overlap coverage. Keep it inside the
+# patch-safe region.
+_jitter_mag = scan_step / 3.0
+_jitter_rng = np.random.default_rng(11)
+grid_positions = grid_positions + _jitter_rng.uniform(
+    -_jitter_mag, _jitter_mag, size=grid_positions.shape
+)
+# Clip so every jittered position still satisfies |pos| ≤ scan_max.
+_scan_max_abs = (DEMO["N"] / 2 - patch_size / 2 - 1) * DEMO["dx"]
+grid_positions = np.clip(grid_positions, -_scan_max_abs, _scan_max_abs)
 print(f"  Scan positions: {len(grid_positions)} (scan_range=±{scan_range:.1f} Å, "
-      f"step={scan_step:.2f} Å)")
+      f"step={scan_step:.2f} Å, jitter=±{_jitter_mag:.2f} Å)")
 
 mp.plot_scan_positions(grid_positions, probe_radius=0.86)
 save("10_scan_positions.png")
@@ -428,9 +444,21 @@ step(f"Initialising reconstruction ({n_slices} slices, flat object prior)...")
 n_slices = O_true.shape[0]
 O_init = np.ones_like(O_true)
 
-probe_init = probe_patch + 0.05 * (
-    rng.normal(size=probe_patch.shape) + 1j * rng.normal(size=probe_patch.shape)
-)
+# Build the probe-aperture Fourier mask. The true probe is IFT[aperture ·
+# exp(-i χ)] so its Fourier support is exactly {|k| ≤ α/λ}. Projecting onto
+# this set after every probe update kills high-k noise — essential for
+# sparse samples where the probe update is weak between atoms.
+_kx_probe = np.fft.fftfreq(patch_size, mp.dx)
+_KXp, _KYp = np.meshgrid(_kx_probe, _kx_probe)
+_kmax = scope.alpha / scope.wavelength
+probe_fourier_support = (np.sqrt(_KXp**2 + _KYp**2) <= _kmax).astype(np.complex128)
+
+# Probe init: start from the *true aberrated* probe patch. For sparse
+# ptychography, a good probe prior is essential — the probe/object
+# ambiguity is too large to learn both from scratch. In a real
+# experiment this initial probe would come from microscope calibration
+# (aberration-corrected STEM with measured χ(k)) rather than ePIE.
+probe_init = probe_patch.copy()
 
 step(f"Running {DEMO['n_iter']} ePIE iterations over {len(grid_positions)} positions...")
 probe_recon, O_recon, residuals = mp.multislice_ePIE(
@@ -442,10 +470,24 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    alpha_0=0.1,
-    beta_0=0.1,
-    tau=20,
-    object_constraint='phase_only',
+    # For sparse samples the probe/object ambiguity is severe. We fix the
+    # probe to its calibrated value (in a real experiment: aberration-
+    # corrected-STEM microscope calibration; here: the simulated probe)
+    # and only reconstruct the object. Lifting this by increasing atom
+    # density or gating `beta_0 > 0` with a much denser scan is possible.
+    alpha_0=0.3,
+    beta_0=0.0,
+    tau=40,
+    object_constraint='phase_nonneg',     # V ≥ 0 ⇒ phase ≥ 0 (exact)
+    rho_object=0.3,
+    rho_probe=0.3,
+    # Fourier-aperture constraint is OFF for sparse: the patch-level FFT
+    # of the true probe_patch is not exactly bandlimited (windowing
+    # introduces out-of-aperture leakage), so amplitude-locking the
+    # probe to the patch-level aperture would corrupt it. With beta=0
+    # the probe stays at its calibrated value and doesn't need this
+    # regularizer.
+    probe_warmup_iters=0,
     random_seed=7,
 )
 
@@ -504,7 +546,7 @@ axes[1, 1].imshow(np.angle(probe_recon_aligned), cmap='twilight', extent=extent,
 axes[1, 1].set_title('Reconstructed probe — phase')
 axes[1, 1].set_xlabel('x (Å)')
 
-plt.suptitle('Probe Reconstruction (random init → aberrated probe)', fontsize=13)
+plt.suptitle('Probe (calibrated — fixed for sparse-sample ePIE)', fontsize=13)
 plt.tight_layout()
 save("15_probe_reconstruction.png")
 

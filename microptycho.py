@@ -150,9 +150,16 @@ class MicroPtycho:
             return field
         if constraint in ("unit", "phase", "phase_only", "unit_modulus"):
             return np.exp(1j * np.angle(field))
+        if constraint in ("phase_nonneg", "phase_positive"):
+            # Physically exact for pure-phase objects built as exp(i·σ·V)
+            # with V ≥ 0: forces |O|=1 and phase ≥ 0. Strongly regularizes
+            # sparse ptychography by killing the phase-sign ambiguity that
+            # phase_only still allows.
+            phi = np.angle(field)
+            return np.exp(1j * np.maximum(phi, 0.0))
         raise ValueError(
             "object_constraint must be one of None, 'unit', 'phase', "
-            "'phase_only', or 'unit_modulus'."
+            "'phase_only', 'unit_modulus', or 'phase_nonneg'."
         )
 
     @staticmethod
@@ -165,6 +172,28 @@ class MicroPtycho:
         if current_energy <= eps or target_energy <= eps:
             return probe
         return probe * np.sqrt(target_energy / current_energy)
+
+    @staticmethod
+    def _project_probe_to_aperture(probe, aperture):
+        """Project a probe onto {F(probe) = aperture · exp(iφ), φ ∈ ℝ}.
+
+        The idealized aberrated probe satisfies F(probe) = aperture(k) ·
+        exp(-iχ(k)), so |F(probe)| equals the 0/1 aperture and only the
+        phase χ is a free parameter. Forcing |F(probe)| = aperture is
+        strictly stronger than multiplying by the mask (which only zeros
+        k outside the aperture) and collapses the probe's degrees of
+        freedom from `sum(aperture)` complex numbers to `sum(aperture)`
+        *real* numbers (one phase per in-aperture bin). Critical for
+        sparse ptychography where the probe update is weak and otherwise
+        absorbs object features.
+        """
+        F = np.fft.fft2(probe)
+        mag = np.abs(F)
+        # Where |F| ~ 0, the phase is undefined — use 1 (which the
+        # aperture-multiplication then zeros out anyway).
+        safe_mag = np.where(mag > 1e-20, mag, 1.0)
+        F_new = aperture * (F / safe_mag)
+        return np.fft.ifft2(F_new)
 
     @staticmethod
     def _remove_phase_ramp(field, dx, eps=1e-12):
@@ -489,8 +518,24 @@ class MicroPtycho:
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
                         normalize_probe=True, remove_probe_phase_ramp=True,
+                        probe_fourier_support=None, probe_warmup_iters=0,
                         random_seed=None,
                         verbose=True):
+        """
+        Regularization knobs (on top of the usual ePIE options):
+
+        probe_fourier_support : bool ndarray or None
+            Boolean mask the size of the probe patch (k-space layout matching
+            `np.fft.fft2(probe)`, i.e. *not* fftshifted). When set, the probe
+            is projected onto the support after every probe update: for an
+            aberrated convergent probe this enforces the physical aperture
+            |k| ≤ α/λ. Essential for sparse samples where the probe update
+            signal is weak and the probe tends to soak up noise.
+        probe_warmup_iters : int
+            Keep the probe fixed (beta=0) for this many iterations, giving
+            the object a chance to settle before probe/object ambiguity
+            kicks in. Recommended for sparse samples.
+        """
         if fresnel_kernel is None:
             fresnel_kernel = self.make_fresnel_kernel(shape=probe.shape, dx=self.dx if dx is None else dx)
         if dx is None:
@@ -501,6 +546,8 @@ class MicroPtycho:
             raise ValueError("fresnel_kernel must match the probe patch shape.")
         if len(intensity) != len(grid_positions):
             raise ValueError("intensity and grid_positions must have the same length.")
+        if probe_fourier_support is not None and probe_fourier_support.shape != probe.shape:
+            raise ValueError("probe_fourier_support must have the probe shape.")
         if beta_0 is None:
             beta_0 = alpha_0
         positions = np.arange(len(intensity))
@@ -514,11 +561,16 @@ class MicroPtycho:
         target_probe_energy = float(np.mean(np.sum(intensity, axis=(-2, -1))) / patch_pixels)
         measured_amplitude = np.sqrt(np.maximum(intensity, 0.0))
 
+        # Apply Fourier support once up-front so the initial probe is
+        # consistent with the aperture constraint.
+        if probe_fourier_support is not None:
+            probe = self._project_probe_to_aperture(probe, probe_fourier_support)
+
         for i in range(n_iter):
             rng.shuffle(positions)
             iter_residual = 0.0
             alpha = alpha_0 / (1 + i / tau)
-            beta = beta_0 / (1 + i / tau)
+            beta = 0.0 if i < probe_warmup_iters else beta_0 / (1 + i / tau)
             for j in positions:
                 y_slice, x_slice, shift_x, shift_y = self._scan_patch_geometry(
                     grid_positions[j], dx, patch_size, O.shape[1:]
@@ -578,6 +630,16 @@ class MicroPtycho:
                     # used to generate `error` above. Using the updated patch here
                     # mixes forward and backward models and slows convergence.
                     psi_corrected = self._inverse_transmission(patch, eps) * psi_corrected
+
+            # Fourier-aperture projection: the ideal aberrated probe has
+            # F(probe) = aperture · exp(-iχ), so |F(probe)| equals the
+            # aperture (0 or 1) and only the phase χ is free. Enforcing
+            # both amplitude AND support after every probe update kills
+            # high-k noise and forces the probe to be a valid aperture-
+            # constrained aberrated probe — which is the dominant failure
+            # mode for sparse samples.
+            if beta != 0 and probe_fourier_support is not None:
+                probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
             if normalize_probe and beta != 0:
                 probe = self._normalize_probe_energy(probe, target_probe_energy, eps=eps)
