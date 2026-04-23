@@ -74,8 +74,10 @@ Regularizers that make this work for sparse data:
   random "negative atom" artefacts.
 - **Scan jitter** — a perfectly regular raster aliases with the atom
   lattice into a moiré pattern. Add `±scan_step/3` uniform jitter.
-- **Dense scanning** — `scan_step ≤ ¼·in-plane-spacing` (not the usual
-  ~0.7× probe diameter). Each atom needs multiple probe placements.
+- **Dense scanning** — `scan_step ≤ ⅙·in-plane-spacing` (not the usual
+  ~0.7× probe diameter). Each atom needs multiple probe placements, and
+  dense scanning is the single most effective knob for cleaning up
+  Nyquist-scale ringing between atoms in the object reconstruction.
 - **Aggressive `alpha_0`** — the probe dominates the diffraction
   pattern for sparse samples, so the *object's contribution* to residual
   is small. In the 36-atom demo, going from identity-O to true-O drops

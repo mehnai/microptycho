@@ -133,11 +133,12 @@ scan_range = min(
     0.98 * _scan_max,
 )
 
-# Scan step: ≤¼ the in-plane spacing. For sparse samples dense scans are
+# Scan step: 1/6 the in-plane spacing. For sparse samples dense scans are
 # crucial — each probe position only sees atoms strongly when it lands
 # near one, so oversample positions to cover every atom with several
-# probe placements.
-scan_step = max(0.25 * _in_plane_spacing, 2 * DEMO["dx"])
+# probe placements. Denser scanning also improves probe/object
+# disambiguation in the sparse regime.
+scan_step = max(_in_plane_spacing / 6.0, 2 * DEMO["dx"])
 
 print(f"  Config: N={DEMO['N']}, dx={DEMO['dx']} Å, FOV={_fov:.1f} Å")
 print(f"  Sample: {DEMO['nx']}×{DEMO['ny']}×{DEMO['nz']} {_structure} cells "
@@ -493,15 +494,14 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     # aperture collapses the probe to one-phase-per-k-bin, so probe
     # update cannot absorb object features. Warmup lets the object
     # settle first (otherwise probe tries to explain a random O).
-    alpha_0=3.0,                           # push hard: object contribution
-                                           #   to residual is small (probe
-                                           #   dominates), needs aggressive
-                                           #   updates to converge
+    alpha_0=3.0,                           # push hard: probe dominates
+                                           #   diffraction, so object
+                                           #   gradients are weak
     beta_0=0.2,                            # amplitude-locked → probe can
                                            #   only learn phase (χ)
-    tau=80,                                # keep alpha high longer
+    tau=80,
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
-    rho_object=0.05,                       # minimal Tikhonov damping
+    rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,
