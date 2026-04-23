@@ -96,8 +96,11 @@ _n_atoms_eff = 1 + (_n_atoms_side - 1) * _rot_scale  # effective side for fittin
 
 # Solve jointly so sample-span + probe-patch ≤ margin·FOV. The probe patch
 # is set to ~2× the in-plane atom spacing (so each probe position touches
-# several atoms) but no smaller than `patch_min_A`.
-_margin = 0.9
+# several atoms) but no smaller than `patch_min_A`. `margin` is kept
+# conservative (0.8) so the outer atoms sit well inside the scan-safe
+# region — near the scan boundary corners get few probe placements and
+# reconstruct weakly.
+_margin = 0.8
 _patch_min = DEMO["patch_min_A"]
 # Case A: patch clamps to 2·spacing → (n_eff+1)·spacing ≤ margin·FOV
 _spacing_A = _margin * _fov / (_n_atoms_eff + 1)
@@ -123,13 +126,15 @@ n_atoms_total = DEMO["nx"] * DEMO["ny"] * DEMO["nz"] * ATOMS_PER_CELL[_structure
 
 patch_size = int(np.ceil(_patch_A / DEMO["dx"] / 2.0) * 2)
 
-# Scan range: cover the atoms, but stay inside the patch-safe region
-# (|scan_pos| + patch_half ≤ N·dx/2). Rotated lattice bounding box
-# grows by `_rot_scale` along each axis.
+# Scan range: cover the atoms with margin, but stay inside the
+# patch-safe region (|scan_pos| + patch_half ≤ N·dx/2). Rotated
+# lattice bounding box grows by `_rot_scale` along each axis. Pad by
+# an extra full spacing so the outermost atoms get scan positions on
+# BOTH sides (otherwise they're under-sampled and reconstruct weakly).
 _sample_half_span = (_n_atoms_side - 1) / 2.0 * _in_plane_spacing * _rot_scale
 _scan_max = (DEMO["N"] / 2 - patch_size / 2) * DEMO["dx"]
 scan_range = min(
-    DEMO["scan_fill"] * _sample_half_span + _in_plane_spacing,
+    _sample_half_span + 1.5 * _in_plane_spacing,
     0.98 * _scan_max,
 )
 
