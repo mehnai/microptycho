@@ -204,3 +204,23 @@ def test_parseval_theorem_numpy_convention():
     lhs = np.sum(np.abs(psi) ** 2)
     rhs = np.sum(np.abs(P) ** 2) / (N * N)
     assert lhs == pytest.approx(rhs, rel=1e-12)
+
+
+def test_align_translation_recovers_integer_shift():
+    """ePIE has a translation gauge — for a periodic lattice the recon
+    can drift by an integer number of periods. align_translation
+    cross-correlates and rolls the field back."""
+    from microptycho import MicroPtycho as MP
+    field = np.zeros((64, 64), dtype=complex)
+    field[20:25, 20:25] = np.exp(1j * 1.5)
+    shifted = np.roll(field, (5, -3), axis=(-2, -1))
+    aligned = MP.align_translation(shifted, field)
+    assert np.max(np.abs(aligned - field)) < 1e-12
+
+
+def test_align_translation_is_noop_when_no_shift():
+    from microptycho import MicroPtycho as MP
+    rng = np.random.default_rng(0)
+    field = (rng.normal(size=(32, 32)) + 1j * rng.normal(size=(32, 32)))
+    out = MP.align_translation(field, field)
+    assert np.max(np.abs(out - field)) < 1e-12

@@ -267,6 +267,37 @@ class MicroPtycho:
         ax, ay, c = coeffs
         return field * np.exp(-1j * (ax * X + ay * Y + c))
 
+    @staticmethod
+    def align_translation(field, reference):
+        """
+        Remove an integer-pixel real-space translation between `field`
+        and `reference`. ePIE has a translation gauge freedom — the
+        reconstructed object and probe can drift together by any
+        vector. With a periodic lattice this lets the algorithm
+        converge to a position offset by an integer number of lattice
+        periods from the ground truth, which visually "loses" a row
+        of atoms at one edge while gaining ghost rows at the other.
+
+        Uses cross-correlation on the phase to find the shift, then
+        rolls `field` to bring it onto the reference. Wrap-aware (the
+        roll is exact for a periodic FOV).
+        """
+        if field.shape != reference.shape:
+            raise ValueError("field and reference must have identical shapes.")
+        # Cross-correlate the magnitude — robust against global phase
+        # offset and linear phase ramps which align_phase_affine handles.
+        phase_field = np.angle(field)
+        phase_ref = np.angle(reference)
+        F1 = np.fft.fft2(phase_field)
+        F2 = np.fft.fft2(phase_ref)
+        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)).real)
+        peak_y, peak_x = np.unravel_index(np.argmax(xcorr), xcorr.shape)
+        shift_y = peak_y - field.shape[0] // 2
+        shift_x = peak_x - field.shape[1] // 2
+        if shift_y == 0 and shift_x == 0:
+            return field
+        return np.roll(field, (-shift_y, -shift_x), axis=(-2, -1))
+
     # ------------------------------------------------------------------ #
     #  Wave propagation
     # ------------------------------------------------------------------ #

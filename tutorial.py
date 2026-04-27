@@ -513,9 +513,17 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     random_seed=7,
 )
 
-# Align per-slice global phase for fair visual comparison against ground truth.
+# Align per-slice global phase + translation for fair visual comparison
+# against ground truth. ePIE has a translation gauge freedom — with a
+# periodic lattice the reconstruction can converge to a position offset
+# by an integer number of lattice periods from truth, "losing" rows at
+# one edge. Cross-correlation alignment fixes this; affine phase
+# alignment then handles global phase and Fourier-shift residuals.
 O_recon_aligned = O_recon.copy()
 for k in range(n_slices):
+    O_recon_aligned[k] = mp.align_translation(
+        O_recon_aligned[k], O_true[k],
+    )
     O_recon_aligned[k] = mp.align_phase_affine(
         O_recon_aligned[k],
         O_true[k],
