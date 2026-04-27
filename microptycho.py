@@ -278,20 +278,22 @@ class MicroPtycho:
         periods from the ground truth, which visually "loses" a row
         of atoms at one edge while gaining ghost rows at the other.
 
-        Uses cross-correlation on the phase to find the shift, then
-        rolls `field` to bring it onto the reference. Wrap-aware (the
-        roll is exact for a periodic FOV).
+        Uses complex cross-correlation and selects the peak in |xcorr|
+        to find the shift, then rolls `field` onto the reference.
+        Wrap-aware (the roll is exact for a periodic FOV).
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
-        # Cross-correlate the magnitude — robust against global phase
-        # offset and linear phase ramps which align_phase_affine handles.
-        phase_field = np.angle(field)
-        phase_ref = np.angle(reference)
-        F1 = np.fft.fft2(phase_field)
-        F2 = np.fft.fft2(phase_ref)
-        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)).real)
-        peak_y, peak_x = np.unravel_index(np.argmax(xcorr), xcorr.shape)
+        # Use complex cross-correlation and maximize |xcorr| so the
+        # estimated shift is invariant to unknown global phase between
+        # `field` and `reference`. Correlating wrapped phase maps
+        # directly can bias the peak on strongly periodic lattices and
+        # produce the apparent "lost edge row / extra ghost row" effect.
+        F1 = np.fft.fft2(field)
+        F2 = np.fft.fft2(reference)
+        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)))
+        xcorr_abs = np.abs(xcorr)
+        peak_y, peak_x = np.unravel_index(np.argmax(xcorr_abs), xcorr_abs.shape)
         shift_y = peak_y - field.shape[0] // 2
         shift_x = peak_x - field.shape[1] // 2
         if shift_y == 0 and shift_x == 0:
