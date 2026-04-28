@@ -476,11 +476,10 @@ probe_fourier_support = (np.sqrt(KX_patch**2 + KY_patch**2) <= kmax).astype(floa
 # constraint suppresses non-physical high-k probe noise.
 _ideal_patch_hp = patch_size // 2
 _c = mp.N // 2
-probe_ideal_patch = np.fft.fftshift(probe_ideal)[
+probe_init = np.fft.fftshift(probe_ideal)[
     _c - _ideal_patch_hp: _c + _ideal_patch_hp,
     _c - _ideal_patch_hp: _c + _ideal_patch_hp,
 ].copy()
-probe_init = probe_ideal_patch.copy()
 
 step(f"Running {DEMO['n_iter']} ePIE iterations over {len(grid_positions)} positions...")
 probe_recon, O_recon, residuals = mp.multislice_ePIE(
@@ -504,6 +503,8 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
+    object_phase_shrink=4e-4,              # suppress interstitial background
+    probe_update_clip=3e-2,                # limit probe outlier updates
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=40,                 # let object settle before
                                            #   updating probe

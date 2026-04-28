@@ -550,6 +550,7 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
+                        object_phase_shrink=0.0, probe_update_clip=0.0,
                         normalize_probe=True, remove_probe_phase_ramp=True,
                         probe_fourier_support=None, probe_warmup_iters=0,
                         random_seed=None,
@@ -581,6 +582,10 @@ class MicroPtycho:
             raise ValueError("intensity and grid_positions must have the same length.")
         if probe_fourier_support is not None and probe_fourier_support.shape != probe.shape:
             raise ValueError("probe_fourier_support must have the probe shape.")
+        if object_phase_shrink < 0:
+            raise ValueError("object_phase_shrink must be >= 0.")
+        if probe_update_clip < 0:
+            raise ValueError("probe_update_clip must be >= 0.")
         if beta_0 is None:
             beta_0 = alpha_0
         positions = np.arange(len(intensity))
@@ -656,6 +661,13 @@ class MicroPtycho:
                             + rho_probe * patch_intensity
                             + eps
                         ) * error
+                        if probe_update_clip > 0:
+                            mag = np.abs(probe_update)
+                            probe_update = np.where(
+                                mag > probe_update_clip,
+                                probe_update * (probe_update_clip / (mag + eps)),
+                                probe_update,
+                            )
                         probe += self._shift_field(
                             probe_update, -shift_x, -shift_y, dx, probe_KX, probe_KY
                         )
@@ -692,6 +704,10 @@ class MicroPtycho:
                 # real-space shift does alter the discrete |F| slightly).
                 if probe_fourier_support is not None:
                     probe = self._project_probe_to_aperture(probe, probe_fourier_support)
+
+            if object_phase_shrink > 0 and object_constraint in ("phase_nonneg", "phase_positive"):
+                phi = np.maximum(np.angle(O) - object_phase_shrink, 0.0)
+                O = np.exp(1j * phi)
 
             residuals.append(iter_residual)
             if verbose:
