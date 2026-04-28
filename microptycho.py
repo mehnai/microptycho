@@ -284,16 +284,14 @@ class MicroPtycho:
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
-        # Remove linear phase ramps first: a residual ramp broadens or
-        # shifts the correlation peak on periodic lattices.
-        field_d = MicroPtycho._remove_phase_ramp(field, dx=1.0)
-        ref_d = MicroPtycho._remove_phase_ramp(reference, dx=1.0)
-        # Phase-correlation (normalized cross-power spectrum) yields a
-        # sharp translation peak and is invariant to global complex gain.
-        F1 = np.fft.fft2(field_d)
-        F2 = np.fft.fft2(ref_d)
-        cps = F1 * np.conj(F2)
-        xcorr = np.fft.fftshift(np.fft.ifft2(cps / (np.abs(cps) + 1e-12)))
+        # Use complex cross-correlation and maximize |xcorr| so the
+        # estimated shift is invariant to unknown global phase between
+        # `field` and `reference`. Correlating wrapped phase maps
+        # directly can bias the peak on strongly periodic lattices and
+        # produce the apparent "lost edge row / extra ghost row" effect.
+        F1 = np.fft.fft2(field)
+        F2 = np.fft.fft2(reference)
+        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)))
         xcorr_abs = np.abs(xcorr)
         peak_y, peak_x = np.unravel_index(np.argmax(xcorr_abs), xcorr_abs.shape)
         shift_y = peak_y - field.shape[0] // 2
