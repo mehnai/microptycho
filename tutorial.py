@@ -58,7 +58,7 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "n_iter": 120,          # ePIE iterations (joint probe+object)
+    "n_iter": 300,          # ePIE iterations (joint probe+object)
     "voltage": 200e3,       # beam voltage (V)
     # --- sample knobs ------------------------------------------------------
     "nx": 6,                # unit cells along x
@@ -491,27 +491,21 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    # Joint probe+object reconstruction.  The amplitude-locked Fourier
-    # aperture collapses the probe to one-phase-per-k-bin, so probe
-    # update cannot absorb object features. Warmup lets the object
-    # settle first (otherwise probe tries to explain a random O).
-    alpha_0=1.5,                           # probe dominates diffraction,
-                                           #   so object gradients are weak;
-                                           #   too-large alpha overshoots and
-                                           #   reconstruction drifts to a
-                                           #   half-lattice translation gauge
-    beta_0=0.08,                           # more conservative probe update
-                                           #   reduces probe/object leakage
-    tau=50,                                # faster decay → late iterations
-                                           #   stop accumulating drift
-    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
+    # Joint probe+object reconstruction. Amplitude-locked Fourier
+    # aperture collapses probe DoF to one phase per k-bin, so the probe
+    # cannot absorb object features and no warmup is needed. Recipe
+    # taken from CLAUDE.md (the 36-atom canonical demo).
+    alpha_0=3.0,                           # probe dominates diffraction,
+                                           #   so object gradients are weak
+    beta_0=0.2,
+    tau=80,
+    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact);
+                                           #   kills phase-sign ambiguity
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
-    object_phase_shrink=4e-4,              # suppress interstitial background
-    probe_update_clip=3e-2,                # limit probe outlier updates
     probe_fourier_support=probe_fourier_support,
-    probe_warmup_iters=40,                 # let object settle before
-                                           #   updating probe
+    probe_warmup_iters=0,                  # aperture lock makes warmup
+                                           #   unnecessary
     random_seed=7,
 )
 
