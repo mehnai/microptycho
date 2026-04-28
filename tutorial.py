@@ -542,6 +542,23 @@ save("12_residuals.png")
 
 recon_proj = np.angle(O_recon_aligned).sum(axis=0)
 true_proj = np.angle(O_true).sum(axis=0)
+
+# Numerical sanity check: verify recon high-phase regions coincide with
+# true high-phase regions (not the gauge-shifted "atoms-as-gaps" gauge).
+_atom_mask = true_proj > (true_proj.max() * 0.5)
+_gap_mask = true_proj < (true_proj.max() * 0.05)
+_true_atom_mean = float(true_proj[_atom_mask].mean())
+_true_gap_mean = float(true_proj[_gap_mask].mean())
+_recon_at_atoms = float(recon_proj[_atom_mask].mean())
+_recon_at_gaps = float(recon_proj[_gap_mask].mean())
+_atom_gap_contrast = _recon_at_atoms - _recon_at_gaps
+print(f"  Phase at TRUE atom positions: true={_true_atom_mean:.4f} rad, "
+      f"recon={_recon_at_atoms:.4f} rad")
+print(f"  Phase at TRUE gap positions:  true={_true_gap_mean:.4f} rad, "
+      f"recon={_recon_at_gaps:.4f} rad")
+print(f"  Recon atom−gap contrast: {_atom_gap_contrast:+.4f} rad "
+      f"({'OK' if _atom_gap_contrast > 0 else 'INVERTED — atoms reconstructed as gaps'})")
+
 # Lock both panels to the TRUE phase range — twilight is cyclic, so a
 # recon that slightly overshoots true's range displays as alternating
 # sign even when the atoms are at correct positions with correct phase.
