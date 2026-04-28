@@ -559,15 +559,18 @@ print(f"  Phase at TRUE gap positions:  true={_true_gap_mean:.4f} rad, "
 print(f"  Recon atom−gap contrast: {_atom_gap_contrast:+.4f} rad "
       f"({'OK' if _atom_gap_contrast > 0 else 'INVERTED — atoms reconstructed as gaps'})")
 
-# Lock both panels to the TRUE phase range — twilight is cyclic, so a
-# recon that slightly overshoots true's range displays as alternating
-# sign even when the atoms are at correct positions with correct phase.
-_vmin, _vmax = float(true_proj.min()), float(true_proj.max())
+# Use a linear (non-cyclic) colormap for the projected phase. The
+# previous twilight cmap is cyclic — with vmin=0/vmax=phase_max it maps
+# both ends to nearly the same light colour and the middle to dark, so
+# atoms at half-max recon phase look like dark dots ("atoms-as-gaps")
+# even though the recon is correct (atom-gap contrast positive).
+_vmin = 0.0
+_vmax = float(true_proj.max())
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-im0 = axes[0].imshow(true_proj, cmap='twilight', vmin=_vmin, vmax=_vmax)
+im0 = axes[0].imshow(true_proj, cmap='inferno', vmin=_vmin, vmax=_vmax)
 axes[0].set_title("True projected phase (sum over slices)")
 plt.colorbar(im0, ax=axes[0], label='phase (rad)')
-im1 = axes[1].imshow(recon_proj, cmap='twilight', vmin=_vmin, vmax=_vmax)
+im1 = axes[1].imshow(recon_proj, cmap='inferno', vmin=_vmin, vmax=_vmax)
 axes[1].set_title("Reconstructed projected phase (sum over slices)")
 plt.colorbar(im1, ax=axes[1], label='phase (rad)')
 plt.tight_layout()
@@ -612,15 +615,13 @@ fig, axes = plt.subplots(2, len(slices_to_compare), figsize=(5 * len(slices_to_c
 axes = np.atleast_2d(axes)
 if axes.shape[0] == 1:  # single-slice: subplots returns (2,) not (2,1)
     axes = axes.reshape(2, 1)
-# Lock colormap limits to the TRUE phase range for each slice so both
-# panels show the same signal level. Auto-scaling per-panel makes the
-# recon look alternating-sign when it just has a slightly wider range
-# than truth (twilight is cyclic: symmetric low/high both look dark).
+# Linear (non-cyclic) cmap so peaks at phase max read as bright, not as
+# the colormap-cycle wrap-around colour.
 for col, s in enumerate(slices_to_compare):
-    vmin, vmax = float(np.angle(O_true[s]).min()), float(np.angle(O_true[s]).max())
-    axes[0, col].imshow(np.angle(O_true[s]), cmap='twilight', vmin=vmin, vmax=vmax)
+    vmax = float(np.angle(O_true[s]).max())
+    axes[0, col].imshow(np.angle(O_true[s]), cmap='inferno', vmin=0.0, vmax=vmax)
     axes[0, col].set_title(f'True — slice {s}')
-    axes[1, col].imshow(np.angle(O_recon_aligned[s]), cmap='twilight', vmin=vmin, vmax=vmax)
+    axes[1, col].imshow(np.angle(O_recon_aligned[s]), cmap='inferno', vmin=0.0, vmax=vmax)
     axes[1, col].set_title(f'Reconstructed — slice {s}')
 
 axes[0, 0].set_ylabel('True phase')
