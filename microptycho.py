@@ -278,20 +278,24 @@ class MicroPtycho:
         periods from the ground truth, which visually "loses" a row
         of atoms at one edge while gaining ghost rows at the other.
 
-        Uses cross-correlation on the phase to find the shift, then
-        rolls `field` to bring it onto the reference. Wrap-aware (the
-        roll is exact for a periodic FOV).
+        Uses complex cross-correlation and selects the peak in |xcorr|
+        to find the shift, then rolls `field` onto the reference.
+        Wrap-aware (the roll is exact for a periodic FOV).
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
-        # Cross-correlate the magnitude — robust against global phase
-        # offset and linear phase ramps which align_phase_affine handles.
-        phase_field = np.angle(field)
-        phase_ref = np.angle(reference)
-        F1 = np.fft.fft2(phase_field)
-        F2 = np.fft.fft2(phase_ref)
-        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)).real)
-        peak_y, peak_x = np.unravel_index(np.argmax(xcorr), xcorr.shape)
+        # Remove linear phase ramps first: a residual ramp broadens or
+        # shifts the correlation peak on periodic lattices.
+        field_d = MicroPtycho._remove_phase_ramp(field, dx=1.0)
+        ref_d = MicroPtycho._remove_phase_ramp(reference, dx=1.0)
+        # Phase-correlation (normalized cross-power spectrum) yields a
+        # sharp translation peak and is invariant to global complex gain.
+        F1 = np.fft.fft2(field_d)
+        F2 = np.fft.fft2(ref_d)
+        cps = F1 * np.conj(F2)
+        xcorr = np.fft.fftshift(np.fft.ifft2(cps / (np.abs(cps) + 1e-12)))
+        xcorr_abs = np.abs(xcorr)
+        peak_y, peak_x = np.unravel_index(np.argmax(xcorr_abs), xcorr_abs.shape)
         shift_y = peak_y - field.shape[0] // 2
         shift_x = peak_x - field.shape[1] // 2
         if shift_y == 0 and shift_x == 0:
@@ -548,6 +552,7 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
+                        object_phase_shrink=0.0, probe_update_clip=0.0,
                         normalize_probe=True, remove_probe_phase_ramp=True,
                         probe_fourier_support=None, probe_warmup_iters=0,
                         random_seed=None,
@@ -579,6 +584,10 @@ class MicroPtycho:
             raise ValueError("intensity and grid_positions must have the same length.")
         if probe_fourier_support is not None and probe_fourier_support.shape != probe.shape:
             raise ValueError("probe_fourier_support must have the probe shape.")
+        if object_phase_shrink < 0:
+            raise ValueError("object_phase_shrink must be >= 0.")
+        if probe_update_clip < 0:
+            raise ValueError("probe_update_clip must be >= 0.")
         if beta_0 is None:
             beta_0 = alpha_0
         positions = np.arange(len(intensity))
@@ -654,6 +663,13 @@ class MicroPtycho:
                             + rho_probe * patch_intensity
                             + eps
                         ) * error
+                        if probe_update_clip > 0:
+                            mag = np.abs(probe_update)
+                            probe_update = np.where(
+                                mag > probe_update_clip,
+                                probe_update * (probe_update_clip / (mag + eps)),
+                                probe_update,
+                            )
                         probe += self._shift_field(
                             probe_update, -shift_x, -shift_y, dx, probe_KX, probe_KY
                         )
@@ -690,6 +706,10 @@ class MicroPtycho:
                 # real-space shift does alter the discrete |F| slightly).
                 if probe_fourier_support is not None:
                     probe = self._project_probe_to_aperture(probe, probe_fourier_support)
+
+            if object_phase_shrink > 0 and object_constraint in ("phase_nonneg", "phase_positive"):
+                phi = np.maximum(np.angle(O) - object_phase_shrink, 0.0)
+                O = np.exp(1j * phi)
 
             residuals.append(iter_residual)
             if verbose:
