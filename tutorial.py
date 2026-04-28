@@ -58,7 +58,7 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "n_iter": 300,          # ePIE iterations (joint probe+object)
+    "n_iter": 120,          # ePIE iterations (joint probe+object)
     "voltage": 200e3,       # beam voltage (V)
     # --- sample knobs ------------------------------------------------------
     "nx": 6,                # unit cells along x
@@ -495,11 +495,15 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     # aperture collapses the probe to one-phase-per-k-bin, so probe
     # update cannot absorb object features. Warmup lets the object
     # settle first (otherwise probe tries to explain a random O).
-    alpha_0=3.0,                           # probe dominates diffraction,
-                                           #   so object gradients are weak
+    alpha_0=1.5,                           # probe dominates diffraction,
+                                           #   so object gradients are weak;
+                                           #   too-large alpha overshoots and
+                                           #   reconstruction drifts to a
+                                           #   half-lattice translation gauge
     beta_0=0.08,                           # more conservative probe update
                                            #   reduces probe/object leakage
-    tau=80,
+    tau=50,                                # faster decay → late iterations
+                                           #   stop accumulating drift
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
