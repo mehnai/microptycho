@@ -463,20 +463,17 @@ step(f"Initialising reconstruction ({n_slices} slices, flat object prior)...")
 n_slices = O_true.shape[0]
 O_init = np.ones_like(O_true)
 
-# ---- Probe Fourier template + physical aperture support ----
-# Use vacuum probe intensity to set |F(probe)|, but also enforce a hard
-# physical pupil support from α/λ so unphysical high-k components are zero.
-# This keeps the probe energy/shape realistic and prevents probe noise from
-# leaking into the object update.
+# ---- Probe Fourier support (physical aperture) ----
+# Use the microscope semi-angle α to build a hard pupil support in k-space.
+# This keeps probe updates inside the physically illuminated aperture and
+# prevents high-k phase noise from being interpreted as object structure.
 KX_patch, KY_patch = mp.make_k_grid(probe_patch.shape, mp.dx)
 kmax = scope.alpha / mp.wavelength
-aperture_mask = (np.sqrt(KX_patch**2 + KY_patch**2) <= kmax).astype(float)
-probe_fourier_support = np.abs(np.fft.fft2(probe_patch)) * aperture_mask
+probe_fourier_support = (np.sqrt(KX_patch**2 + KY_patch**2) <= kmax).astype(float)
 
-# Start from the ideal (unaberrated) probe and recover the aberrated probe
-# jointly with the object. Regularization in multislice_ePIE (phase-shrink on
-# the object + clipped probe updates + Fourier amplitude lock) keeps the
-# sparse-lattice problem stable.
+# Probe init: start from the *ideal* (unaberrated) probe patch. ePIE
+# then refines the probe within the physical aperture while the support
+# constraint suppresses non-physical high-k probe noise.
 _ideal_patch_hp = patch_size // 2
 _c = mp.N // 2
 probe_init = np.fft.fftshift(probe_ideal)[
@@ -500,7 +497,8 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     # settle first (otherwise probe tries to explain a random O).
     alpha_0=3.0,                           # probe dominates diffraction,
                                            #   so object gradients are weak
-    beta_0=0.08,                           # conservative probe updates
+    beta_0=0.08,                           # more conservative probe update
+                                           #   reduces probe/object leakage
     tau=80,
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
     rho_object=0.05,                       # low Tikhonov, rely on constraint
@@ -508,7 +506,8 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     object_phase_shrink=4e-4,              # suppress interstitial background
     probe_update_clip=3e-2,                # limit probe outlier updates
     probe_fourier_support=probe_fourier_support,
-    probe_warmup_iters=60,                 # object warmup before probe updates
+    probe_warmup_iters=40,                 # let object settle before
+                                           #   updating probe
     random_seed=7,
 )
 
