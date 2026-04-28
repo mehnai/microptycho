@@ -503,6 +503,12 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
                                            #   kills phase-sign ambiguity
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
+    object_phase_shrink=4e-4,              # asymmetric: pushes background
+                                           #   phase to 0; without this,
+                                           #   phase_nonneg still admits a
+                                           #   half-lattice-shifted solution
+                                           #   ("atoms-as-gaps") with same
+                                           #   diffraction
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,                  # aperture lock makes warmup
                                            #   unnecessary
