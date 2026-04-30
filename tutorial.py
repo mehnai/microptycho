@@ -463,13 +463,16 @@ step(f"Initialising reconstruction ({n_slices} slices, flat object prior)...")
 n_slices = O_true.shape[0]
 O_init = np.ones_like(O_true)
 
-# ---- Probe Fourier support (physical aperture) ----
-# Use the microscope semi-angle α to build a hard pupil support in k-space.
-# This keeps probe updates inside the physically illuminated aperture and
-# prevents high-k phase noise from being interpreted as object structure.
-KX_patch, KY_patch = mp.make_k_grid(probe_patch.shape, mp.dx)
-kmax = scope.alpha / mp.wavelength
-probe_fourier_support = (np.sqrt(KX_patch**2 + KY_patch**2) <= kmax).astype(float)
+# ---- Probe Fourier amplitude template (vacuum diffraction in real life) ----
+# CLAUDE.md prescribes passing |F(probe_patch)| as the amplitude-lock
+# template, not a binary 0/1 aperture mask. _project_probe_to_aperture
+# literally sets |F_new(k)| = template, so a 0/1 mask forces
+# |F(probe)| = 1 inside the aperture — wrong probe energy and a
+# discontinuity at the edge that breeds high-k phase noise. The
+# physical envelope from |F(probe_patch)| (= ideal-probe Fourier
+# magnitude, since aberrations are pure phase) gives the correct
+# energy and a smooth aperture roll-off.
+probe_fourier_support = np.abs(np.fft.fft2(probe_patch))
 
 # Probe init: start from the *ideal* (unaberrated) probe patch. ePIE
 # then refines the probe within the physical aperture while the support
@@ -497,8 +500,15 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     # taken from CLAUDE.md (the 36-atom canonical demo).
     alpha_0=3.0,                           # probe dominates diffraction,
                                            #   so object gradients are weak
-    beta_0=0.2,
-    tau=80,
+    beta_0=0.05,                           # gentle probe updates: with the
+                                           #   amplitude lock, |F(probe)| is
+                                           #   pinned, so all DoF are in the
+                                           #   per-k phase (~hundreds of free
+                                           #   parameters) which can absorb
+                                           #   object structure if updated
+                                           #   too aggressively
+    tau=120,                               # slower decay matched to lower
+                                           #   beta so probe keeps refining
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact);
                                            #   kills phase-sign ambiguity
     rho_object=0.05,                       # low Tikhonov, rely on constraint
