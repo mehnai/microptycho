@@ -58,7 +58,12 @@ rng = np.random.default_rng(7)
 DEMO = {
     "N": 256,               # simulation grid size (pixels)
     "dx": 0.43,             # Å per pixel
-    "n_iter": 300,          # ePIE iterations (joint probe+object)
+    "n_iter": 300,          # ePIE iterations (joint probe+object).
+                            # 300 with object_phase_shrink active is
+                            # the sweet spot — going to 600 lets the
+                            # half-lattice gauge slip in even with
+                            # phase_nonneg+shrink, producing a 2x
+                            # density "double lattice" superposition.
     "voltage": 200e3,       # beam voltage (V)
     # --- sample knobs ------------------------------------------------------
     "nx": 6,                # unit cells along x
@@ -494,17 +499,12 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    # Canonical CLAUDE.md recipe for the 36-atom sparse demo. The
-    # amplitude-locked Fourier aperture (probe_fourier_support) leaves
-    # only per-k phases as probe DoF, so no warmup is needed and a
-    # moderately aggressive beta_0 is safe — any per-iter probe noise is
-    # denoised at the end by the parametric Krivanek snap below.
+    # Canonical CLAUDE.md recipe for the 36-atom sparse demo.
     alpha_0=3.0,                           # probe dominates diffraction,
                                            #   so object gradients are weak
     beta_0=0.2,
     tau=80,
-    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact);
-                                           #   kills phase-sign ambiguity
+    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
     probe_fourier_support=probe_fourier_support,
@@ -529,11 +529,37 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
 # by an integer number of lattice periods from truth, "losing" rows at
 # one edge. Cross-correlation alignment fixes this; affine phase
 # alignment then handles global phase and Fourier-shift residuals.
+# Persist pre-alignment state so we can iterate on alignment logic
+# without re-running the full ePIE solve.
+np.save("testrun/_O_recon.npy", O_recon)
+np.save("testrun/_O_true.npy", O_true)
+np.save("testrun/_probe_recon.npy", probe_recon)
+np.save("testrun/_probe_patch.npy", probe_patch)
+
+def _phase_centroid(O_complex, threshold=0.3):
+    """Centroid of the high-phase pixels (atoms) in pixel coordinates."""
+    phi = np.angle(O_complex)
+    # Threshold relative to per-image max — robust to recon under-fit.
+    cutoff = max(phi.max() * threshold, 1e-6)
+    mask = phi > cutoff
+    if not mask.any():
+        return None, None
+    yy, xx = np.indices(phi.shape)
+    weights = phi * mask
+    total = weights.sum()
+    return float((xx * weights).sum() / total), float((yy * weights).sum() / total)
+
 O_recon_aligned = O_recon.copy()
 for k in range(n_slices):
+    cx_t, cy_t = _phase_centroid(O_true[k])
+    cx_b, cy_b = _phase_centroid(O_recon_aligned[k])
     O_recon_aligned[k] = mp.align_translation(
         O_recon_aligned[k], O_true[k],
     )
+    cx_a, cy_a = _phase_centroid(O_recon_aligned[k])
+    print(f"  Centroid slice {k}: truth=({cx_t:.2f},{cy_t:.2f}) "
+          f"recon_pre=({cx_b:.2f},{cy_b:.2f}) (Δ={cx_b-cx_t:+.2f},{cy_b-cy_t:+.2f}) "
+          f"recon_post=({cx_a:.2f},{cy_a:.2f}) (Δ={cx_a-cx_t:+.2f},{cy_a-cy_t:+.2f})")
     O_recon_aligned[k] = mp.align_phase_affine(
         O_recon_aligned[k],
         O_true[k],
@@ -566,6 +592,48 @@ print(f"  Phase at TRUE gap positions:  true={_true_gap_mean:.4f} rad, "
       f"recon={_recon_at_gaps:.4f} rad")
 print(f"  Recon atom−gap contrast: {_atom_gap_contrast:+.4f} rad "
       f"({'OK' if _atom_gap_contrast > 0 else 'INVERTED — atoms reconstructed as gaps'})")
+
+# Per-atom diagnostic: classify each true atom as inner / edge / corner
+# and report recon phase at each. Edge/corner atoms have fewer neighbours
+# so converge slower in sparse ePIE — quantify the gap.
+from scipy.ndimage import maximum_filter, label
+_true_max = true_proj.max()
+_local_max_mask = (true_proj == maximum_filter(true_proj, size=5)) & (true_proj > 0.3 * _true_max)
+_lbl, _n_atoms_found = label(_local_max_mask)
+_atom_ys, _atom_xs, _true_phases, _recon_phases = [], [], [], []
+for ai in range(1, _n_atoms_found + 1):
+    ys, xs = np.where(_lbl == ai)
+    cy = int(round(ys.mean()))
+    cx = int(round(xs.mean()))
+    _atom_ys.append(cy); _atom_xs.append(cx)
+    _true_phases.append(float(true_proj[cy, cx]))
+    _recon_phases.append(float(recon_proj[cy, cx]))
+_atom_ys = np.array(_atom_ys); _atom_xs = np.array(_atom_xs)
+_true_phases = np.array(_true_phases); _recon_phases = np.array(_recon_phases)
+# Distance from sample centroid (= true_proj weighted centroid)
+_yy, _xx = np.indices(true_proj.shape)
+_w = np.maximum(true_proj, 0)
+_cx_centre = (_xx * _w).sum() / _w.sum()
+_cy_centre = (_yy * _w).sum() / _w.sum()
+_dist = np.sqrt((_atom_xs - _cx_centre) ** 2 + (_atom_ys - _cy_centre) ** 2)
+_order = np.argsort(_dist)
+print(f"  Per-atom recovery (n={len(_dist)} atoms found, sorted by distance from sample centroid):")
+print(f"    {'rank':>4s} {'(y,x)':>11s} {'dist':>6s} {'true_φ':>8s} {'recon_φ':>9s} {'ratio':>6s}")
+for rank, idx in enumerate(_order):
+    if rank < 4 or rank >= len(_order) - 4:
+        cy, cx = _atom_ys[idx], _atom_xs[idx]
+        ratio = _recon_phases[idx] / _true_phases[idx] if _true_phases[idx] > 1e-6 else 0.0
+        print(f"    {rank:>4d} ({cy:>4d},{cx:>4d}) {_dist[idx]:>6.1f} "
+              f"{_true_phases[idx]:>8.4f} {_recon_phases[idx]:>9.4f} {ratio:>6.2f}")
+_inner_recon = _recon_phases[_order][:4]
+_outer_recon = _recon_phases[_order][-4:]
+_inner_true = _true_phases[_order][:4]
+_outer_true = _true_phases[_order][-4:]
+_inner_ratio = (_inner_recon / _inner_true).mean()
+_outer_ratio = (_outer_recon / _outer_true).mean()
+print(f"  Inner-4 atoms mean recovery ratio: {_inner_ratio:.2%}")
+print(f"  Outer-4 atoms mean recovery ratio: {_outer_ratio:.2%} (edge effect: "
+      f"outer/inner = {_outer_ratio / _inner_ratio:.2%})")
 
 # Use a linear (non-cyclic) colormap for the projected phase. The
 # previous twilight cmap is cyclic — with vmin=0/vmax=phase_max it maps
