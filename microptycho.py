@@ -195,6 +195,91 @@ class MicroPtycho:
         F_new = aperture * (F / safe_mag)
         return np.fft.ifft2(F_new)
 
+    # Order kept as documented in `_krivanek_basis_at`. The wave-aberration
+    # uses Krivanek/Haider notation with the radial coordinate normalized by
+    # the aperture radius, so each coefficient is "phase contributed at the
+    # aperture edge" in radians.
+    KRIVANEK_LABELS = (
+        'C1',                # defocus, ρ²
+        'A1_cos', 'A1_sin',  # 2-fold astig, ρ²·cos2θ / ρ²·sin2θ
+        'B2_cos', 'B2_sin',  # axial coma, ρ³·cosθ / ρ³·sinθ
+        'A2_cos', 'A2_sin',  # 3-fold astig, ρ³·cos3θ / ρ³·sin3θ
+        'C3',                # spherical, ρ⁴
+        'S3_cos', 'S3_sin',  # axial star, ρ⁴·cos2θ / ρ⁴·sin2θ
+        'A3_cos', 'A3_sin',  # 4-fold astig, ρ⁴·cos4θ / ρ⁴·sin4θ
+    )
+
+    @staticmethod
+    def _krivanek_basis_at(kx, ky, kmax, mask):
+        """Krivanek aberration basis evaluated at the in-aperture k-points.
+
+        Returns a (n_in_aperture, 12) matrix B such that χ(k) ≈ B @ c, with
+        c the coefficient vector (units: radians of phase at the aperture
+        edge). The radial polynomials are *monomials* in ρ = k/kmax (the
+        STEM convention), not orthogonal Zernikes — this means the columns
+        are correlated, but the coefficients map directly to physical
+        Krivanek/Haider aberrations (C1, A1, B2, A2, C3, S3, A3).
+        """
+        kx_in = kx[mask]
+        ky_in = ky[mask]
+        k = np.sqrt(kx_in**2 + ky_in**2)
+        rho = k / max(kmax, 1e-12)
+        theta = np.arctan2(ky_in, kx_in)
+        rho2, rho3, rho4 = rho**2, rho**3, rho**4
+        return np.stack([
+            rho2,
+            rho2 * np.cos(2 * theta), rho2 * np.sin(2 * theta),
+            rho3 * np.cos(theta),     rho3 * np.sin(theta),
+            rho3 * np.cos(3 * theta), rho3 * np.sin(3 * theta),
+            rho4,
+            rho4 * np.cos(2 * theta), rho4 * np.sin(2 * theta),
+            rho4 * np.cos(4 * theta), rho4 * np.sin(4 * theta),
+        ], axis=1)
+
+    @staticmethod
+    def _project_probe_to_krivanek(probe, template, basis, mask, c=None):
+        """Project a probe onto {F = template · exp(iχ), χ = basis @ c}.
+
+        Strong aberrations (e.g. Cs=1mm contributing ~6 rad of phase at
+        the aperture edge) wrap several times across the aperture, so a
+        naive arg() of F(probe)/template aliases. We unwrap the in-aperture
+        phase in 2D (skimage's Goldstein-style algorithm), then solve the
+        Krivanek-monomial LSQ in one shot — recovers canonical coefficients
+        to machine precision regardless of initial state.
+
+        The `c` argument is accepted for API symmetry but is no longer used;
+        the unwrap-then-LSQ path is independent of warm-start.
+
+        Returns (probe_new, c_new).
+        """
+        from skimage.restoration import unwrap_phase
+        F = np.fft.fft2(probe)
+        safe_template = np.where(np.abs(template) > 1e-20, template, 1.0)
+        # Unwrap on an fftshifted layout so the aperture is a single
+        # connected region in the centre of the array (Goldstein needs
+        # connectivity). Mask the outside so unwrap doesn't try to
+        # unwrap noise.
+        phase_full = np.angle(F / safe_template)
+        phase_shift = np.fft.fftshift(phase_full)
+        mask_shift = np.fft.fftshift(mask)
+        masked = np.ma.masked_array(phase_shift, ~mask_shift)
+        unwrapped_shift = np.asarray(unwrap_phase(masked).filled(0.0))
+        unwrapped = np.fft.ifftshift(unwrapped_shift)
+        target = unwrapped[mask]
+        # Add a temporary constant column to the basis so the LSQ can
+        # absorb the global 2π·N offset that unwrap_phase picks
+        # arbitrarily. Without this, c1 and c3 grow huge to fake a
+        # constant via cancelling ρ² and ρ⁴ terms — meaningless when
+        # interpreted as physical aberration coefficients. The constant
+        # is discarded after fitting (a global probe phase is a free
+        # gauge that doesn't affect diffraction).
+        basis_with_const = np.column_stack([basis, np.ones(basis.shape[0])])
+        c_full, *_ = np.linalg.lstsq(basis_with_const, target, rcond=None)
+        c_new = c_full[:-1]
+        F_fit = np.zeros_like(F)
+        F_fit[mask] = template[mask] * np.exp(1j * (basis @ c_new))
+        return np.fft.ifft2(F_fit), c_new
+
     @staticmethod
     def _remove_phase_ramp(field, dx, eps=1e-12):
         """Remove the best-fit linear phase ramp from a complex field.
@@ -553,6 +638,7 @@ class MicroPtycho:
                         object_phase_shrink=0.0, probe_update_clip=0.0,
                         normalize_probe=True, remove_probe_phase_ramp=True,
                         probe_fourier_support=None, probe_warmup_iters=0,
+                        probe_phase='free',
                         random_seed=None,
                         verbose=True):
         """
@@ -586,12 +672,35 @@ class MicroPtycho:
             raise ValueError("object_phase_shrink must be >= 0.")
         if probe_update_clip < 0:
             raise ValueError("probe_update_clip must be >= 0.")
+        if probe_phase not in ('free', 'parameterized'):
+            raise ValueError("probe_phase must be 'free' or 'parameterized'.")
+        if probe_phase == 'parameterized' and probe_fourier_support is None:
+            raise ValueError(
+                "probe_phase='parameterized' requires probe_fourier_support "
+                "(the |F(probe)| amplitude template) — the parametric fit "
+                "constrains only the in-aperture phase."
+            )
         if beta_0 is None:
             beta_0 = alpha_0
         positions = np.arange(len(intensity))
         rng = np.random.default_rng(random_seed)
         residuals = []
         probe_KX, probe_KY = self.make_k_grid(probe.shape, dx)
+        # Krivanek aberration basis (built once; mask + basis matrix don't
+        # change between iters). The fit coefficients carry across iters so
+        # each projection stays in the unwrapped basin (see
+        # _project_probe_to_krivanek).
+        krivanek_basis = None
+        krivanek_mask = None
+        krivanek_coefs = None
+        if probe_phase == 'parameterized':
+            krivanek_mask = probe_fourier_support > (probe_fourier_support.max() * 1e-6)
+            k_in = np.sqrt(probe_KX[krivanek_mask]**2 + probe_KY[krivanek_mask]**2)
+            kmax_eff = float(k_in.max()) if k_in.size else 1.0
+            krivanek_basis = self._krivanek_basis_at(
+                probe_KX, probe_KY, kmax_eff, krivanek_mask
+            )
+            krivanek_coefs = np.zeros(krivanek_basis.shape[1])
         eps = 1e-12
         # See ePIE: target probe energy is derived from measured data via
         # Parseval, not from the (possibly noisy) initial probe.
@@ -676,13 +785,9 @@ class MicroPtycho:
                     # mixes forward and backward models and slows convergence.
                     psi_corrected = self._inverse_transmission(patch, eps) * psi_corrected
 
-            # Fourier-aperture projection: the ideal aberrated probe has
-            # F(probe) = aperture · exp(-iχ), so |F(probe)| equals the
-            # aperture (0 or 1) and only the phase χ is free. Enforcing
-            # both amplitude AND support after every probe update kills
-            # high-k noise and forces the probe to be a valid aperture-
-            # constrained aberrated probe — which is the dominant failure
-            # mode for sparse samples.
+            # Free-phase amplitude lock per iter — F(probe) = template ·
+            # exp(iφ(k)), φ unconstrained per k-bin. The parametric
+            # snap (if requested) happens once after the loop, see below.
             if beta != 0 and probe_fourier_support is not None:
                 probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
@@ -712,6 +817,24 @@ class MicroPtycho:
             residuals.append(iter_residual)
             if verbose:
                 print(f"Iteration {i + 1}/{n_iter} completed. Residual: {iter_residual:.6e}")
+
+        # Post-hoc parametric snap. Free-phase ePIE converges to the
+        # best per-k probe (best residual). The Krivanek snap then fits
+        # those ~hundreds of free phases to 12 physical coefficients,
+        # denoising the probe at the cost of a slightly higher
+        # data-fit residual. The trade-off is bias-vs-variance: snap
+        # gives a probe that's a *valid* aberrated probe by
+        # construction, suitable for reporting microscope aberrations
+        # or feeding into downstream simulations.
+        if probe_phase == 'parameterized':
+            probe, krivanek_coefs = self._project_probe_to_krivanek(
+                probe, probe_fourier_support,
+                krivanek_basis, krivanek_mask,
+            )
+            if verbose:
+                print("Fitted Krivanek aberration coefficients (rad at aperture edge):")
+                for label, value in zip(self.KRIVANEK_LABELS, krivanek_coefs):
+                    print(f"  {label:>7s} = {value:+.4f}")
 
         return probe, O, residuals
 
