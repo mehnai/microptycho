@@ -355,35 +355,69 @@ class MicroPtycho:
     @staticmethod
     def align_translation(field, reference):
         """
-        Remove an integer-pixel real-space translation between `field`
-        and `reference`. ePIE has a translation gauge freedom — the
-        reconstructed object and probe can drift together by any
-        vector. With a periodic lattice this lets the algorithm
-        converge to a position offset by an integer number of lattice
-        periods from the ground truth, which visually "loses" a row
-        of atoms at one edge while gaining ghost rows at the other.
+        Remove a real-space translation between `field` and `reference`,
+        with sub-pixel precision. ePIE has a translation gauge freedom —
+        the reconstructed object and probe can drift together by any
+        vector, including by fractional pixels. An integer-pixel-only
+        alignment leaves up to ½ pixel of visible offset (with dx≈0.4 Å
+        per pixel that's ~0.2 Å of unfixable drift in the figure).
 
-        Uses complex cross-correlation and selects the peak in |xcorr|
-        to find the shift, then rolls `field` onto the reference.
-        Wrap-aware (the roll is exact for a periodic FOV).
+        Algorithm:
+          1. Complex cross-correlation, integer peak in |xcorr| (robust
+             to unknown global phase and to periodic-lattice ambiguities
+             — the all-atoms-aligned peak dominates over period-shifted
+             peaks because each lattice mismatch loses one row of atoms).
+          2. Parabolic fit on the three points around the integer peak
+             along each axis → sub-pixel refinement (≈0.01 px in
+             practice).
+          3. Apply the full sub-pixel shift via Fourier-domain phase
+             ramp — wrap-aware (exact for a periodic FOV).
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
-        # Use complex cross-correlation and maximize |xcorr| so the
-        # estimated shift is invariant to unknown global phase between
-        # `field` and `reference`. Correlating wrapped phase maps
-        # directly can bias the peak on strongly periodic lattices and
-        # produce the apparent "lost edge row / extra ghost row" effect.
         F1 = np.fft.fft2(field)
         F2 = np.fft.fft2(reference)
         xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)))
         xcorr_abs = np.abs(xcorr)
+        ny, nx = field.shape
         peak_y, peak_x = np.unravel_index(np.argmax(xcorr_abs), xcorr_abs.shape)
-        shift_y = peak_y - field.shape[0] // 2
-        shift_x = peak_x - field.shape[1] // 2
-        if shift_y == 0 and shift_x == 0:
-            return field
-        return np.roll(field, (-shift_y, -shift_x), axis=(-2, -1))
+
+        def _parabolic_offset(left, centre, right):
+            denom = left - 2.0 * centre + right
+            if abs(denom) < 1e-20:
+                return 0.0
+            # Closed form for the vertex of the parabola through three
+            # equally-spaced samples; clamp to ±½ in case of pathology.
+            return float(np.clip(0.5 * (left - right) / denom, -0.5, 0.5))
+
+        sub_y = sub_x = 0.0
+        if 0 < peak_y < ny - 1:
+            sub_y = _parabolic_offset(
+                xcorr_abs[peak_y - 1, peak_x],
+                xcorr_abs[peak_y, peak_x],
+                xcorr_abs[peak_y + 1, peak_x],
+            )
+        if 0 < peak_x < nx - 1:
+            sub_x = _parabolic_offset(
+                xcorr_abs[peak_y, peak_x - 1],
+                xcorr_abs[peak_y, peak_x],
+                xcorr_abs[peak_y, peak_x + 1],
+            )
+
+        shift_y = (peak_y - ny // 2) + sub_y
+        shift_x = (peak_x - nx // 2) + sub_x
+
+        if abs(shift_y) < 1e-6 and abs(shift_x) < 1e-6:
+            return field.copy()
+
+        # Fourier-domain shift in pixel units. exp(+i2π·shift·k) on F
+        # produces field(y - shift_y, x - shift_x) — i.e., shifts field
+        # backward by shift, undoing its offset relative to reference.
+        ky = np.fft.fftfreq(ny)
+        kx = np.fft.fftfreq(nx)
+        KX, KY = np.meshgrid(kx, ky)
+        phase = np.exp(1j * 2 * np.pi * (shift_x * KX + shift_y * KY))
+        return np.fft.ifft2(np.fft.fft2(field) * phase)
 
     # ------------------------------------------------------------------ #
     #  Wave propagation

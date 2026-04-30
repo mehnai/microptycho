@@ -494,31 +494,19 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    # Joint probe+object reconstruction. Amplitude-locked Fourier
-    # aperture collapses probe DoF to one phase per k-bin, so the probe
-    # cannot absorb object features and no warmup is needed. Recipe
-    # taken from CLAUDE.md (the 36-atom canonical demo).
+    # Canonical CLAUDE.md recipe for the 36-atom sparse demo. The
+    # amplitude-locked Fourier aperture (probe_fourier_support) leaves
+    # only per-k phases as probe DoF, so no warmup is needed and a
+    # moderately aggressive beta_0 is safe — any per-iter probe noise is
+    # denoised at the end by the parametric Krivanek snap below.
     alpha_0=3.0,                           # probe dominates diffraction,
                                            #   so object gradients are weak
-    beta_0=0.05,                           # gentle probe updates: with the
-                                           #   amplitude lock, |F(probe)| is
-                                           #   pinned, so all DoF are in the
-                                           #   per-k phase (~hundreds of free
-                                           #   parameters) which can absorb
-                                           #   object structure if updated
-                                           #   too aggressively
-    tau=120,                               # slower decay matched to lower
-                                           #   beta so probe keeps refining
+    beta_0=0.2,
+    tau=80,
     object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact);
                                            #   kills phase-sign ambiguity
     rho_object=0.05,                       # low Tikhonov, rely on constraint
     rho_probe=0.3,
-    object_phase_shrink=4e-4,              # asymmetric: pushes background
-                                           #   phase to 0; without this,
-                                           #   phase_nonneg still admits a
-                                           #   half-lattice-shifted solution
-                                           #   ("atoms-as-gaps") with same
-                                           #   diffraction
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,                  # aperture lock makes warmup
                                            #   unnecessary
