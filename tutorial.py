@@ -522,6 +522,16 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,                  # aperture lock makes warmup
                                            #   unnecessary
+    probe_phase='parameterized',           # post-hoc fit the converged
+                                           #   |F(probe)| phase to a 12-
+                                           #   coefficient Krivanek
+                                           #   expansion (C1, A1, B2, A2,
+                                           #   C3, S3, A3). Replaces
+                                           #   ~hundreds of free per-k
+                                           #   phases with a denoised,
+                                           #   physically-valid aberrated
+                                           #   probe and prints the fitted
+                                           #   coefficients.
     random_seed=7,
 )
 
