@@ -353,37 +353,76 @@ class MicroPtycho:
         return field * np.exp(-1j * (ax * X + ay * Y + c))
 
     @staticmethod
-    def align_translation(field, reference):
+    def align_translation(field, reference, threshold=0.3):
         """
-        Remove an integer-pixel real-space translation between `field`
-        and `reference`. ePIE has a translation gauge freedom — the
-        reconstructed object and probe can drift together by any
-        vector. With a periodic lattice this lets the algorithm
-        converge to a position offset by an integer number of lattice
-        periods from the ground truth, which visually "loses" a row
-        of atoms at one edge while gaining ghost rows at the other.
+        Remove a real-space translation between `field` and `reference`
+        by matching the phase-weighted centroids of the two images
+        (sub-pixel precision, no parameters to tune).
 
-        Uses complex cross-correlation and selects the peak in |xcorr|
-        to find the shift, then rolls `field` onto the reference.
-        Wrap-aware (the roll is exact for a periodic FOV).
+        Why not cross-correlation? Three failure modes for our regime:
+          - |O|=1 everywhere (unit-modulus object) → F[0,0]≈N², so the
+            IFFT cross-correlation has a near-constant baseline ≈N² at
+            every lag with the true shift signal as a sub-percent
+            perturbation on top.
+          - The periodic atom lattice produces a comb of cross-
+            correlation peaks at every integer multiple of the lattice
+            period. When the recon has weak corner atoms, a multi-
+            period-shifted false peak can EXCEED the zero-shift peak
+            (the brighter inner atoms still align cleanly while the
+            zero-shift alignment is penalised by the dim corners).
+          - Sub-pixel parabolic refinement on a near-flat xcorr around
+            the true peak amplifies whichever side has random
+            asymmetric noise.
+
+        Centroid matching sidesteps all three: the centroid is a
+        global statistic on the entire phase image, robust to
+        periodicity (lattice symmetry leaves the centroid at the
+        geometric centre), unaffected by unit-modulus DC, and
+        intrinsically sub-pixel.
+
+        Threshold: only pixels with phase ≥ `threshold` × max contribute,
+        so the centroid is computed over the atom-bearing region rather
+        than diluted by background phase noise. With symmetric corner-
+        dimming (the typical edge-effect mode), the centroid is
+        unbiased: dim atoms at symmetric positions still contribute to
+        a centroid at the geometric centre.
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
-        # Use complex cross-correlation and maximize |xcorr| so the
-        # estimated shift is invariant to unknown global phase between
-        # `field` and `reference`. Correlating wrapped phase maps
-        # directly can bias the peak on strongly periodic lattices and
-        # produce the apparent "lost edge row / extra ghost row" effect.
-        F1 = np.fft.fft2(field)
-        F2 = np.fft.fft2(reference)
-        xcorr = np.fft.fftshift(np.fft.ifft2(F1 * np.conj(F2)))
-        xcorr_abs = np.abs(xcorr)
-        peak_y, peak_x = np.unravel_index(np.argmax(xcorr_abs), xcorr_abs.shape)
-        shift_y = peak_y - field.shape[0] // 2
-        shift_x = peak_x - field.shape[1] // 2
-        if shift_y == 0 and shift_x == 0:
-            return field
-        return np.roll(field, (-shift_y, -shift_x), axis=(-2, -1))
+        ny, nx = field.shape
+
+        def _centroid(complex_field):
+            phi = np.angle(complex_field)
+            cutoff = max(phi.max() * threshold, 1e-6)
+            mask = phi > cutoff
+            if not mask.any():
+                return 0.0, 0.0
+            yy, xx = np.indices(phi.shape)
+            # Weight by (phi - cutoff) so brighter atoms count more,
+            # subtracting the cutoff floor so threshold-crossing pixels
+            # don't get a nonzero weight just for being above floor.
+            weights = (phi - cutoff) * mask
+            total = weights.sum()
+            if total <= 0:
+                return 0.0, 0.0
+            return (xx * weights).sum() / total, (yy * weights).sum() / total
+
+        cx_f, cy_f = _centroid(field)
+        cx_r, cy_r = _centroid(reference)
+        shift_x = cx_f - cx_r
+        shift_y = cy_f - cy_r
+
+        if abs(shift_y) < 1e-6 and abs(shift_x) < 1e-6:
+            return field.copy()
+
+        # Fourier-domain shift in pixel units. exp(+i2π·shift·k) on F
+        # produces field(y - shift_y, x - shift_x) — i.e. shifts field
+        # backward by `shift` to undo its offset relative to reference.
+        ky = np.fft.fftfreq(ny)
+        kx = np.fft.fftfreq(nx)
+        KX, KY = np.meshgrid(kx, ky)
+        phase = np.exp(1j * 2 * np.pi * (shift_x * KX + shift_y * KY))
+        return np.fft.ifft2(np.fft.fft2(field) * phase)
 
     # ------------------------------------------------------------------ #
     #  Wave propagation
@@ -635,10 +674,14 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
-                        object_phase_shrink=0.0, probe_update_clip=0.0,
+                        object_phase_shrink=0.0,
+                        object_phase_shrink_reweighted=False,
+                        epsilon_l0=5e-3,
+                        probe_update_clip=0.0,
                         normalize_probe=True, remove_probe_phase_ramp=True,
                         probe_fourier_support=None, probe_warmup_iters=0,
                         probe_phase='free',
+                        sample_support=None,
                         random_seed=None,
                         verbose=True):
         """
@@ -811,8 +854,38 @@ class MicroPtycho:
                     probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
             if object_phase_shrink > 0 and object_constraint in ("phase_nonneg", "phase_positive"):
-                phi = np.maximum(np.angle(O) - object_phase_shrink, 0.0)
+                phi = np.angle(O)
+                if object_phase_shrink_reweighted:
+                    # Iteratively-reweighted L1 (approx. L0 sparsity):
+                    # shrink penalty inversely scales with current
+                    # phase magnitude, so dim phantom atoms
+                    # (phi ≪ epsilon_l0) are heavily suppressed while
+                    # bright real atoms (phi ≫ epsilon_l0) barely
+                    # shrink at all. This is the right prior for
+                    # sparse periodic samples — plain L1 (uniform
+                    # shrink) treats real and phantom atoms equally
+                    # if their magnitudes have converged to similar
+                    # levels, leaving the lattice-doubling gauge
+                    # intact.
+                    phi = np.maximum(
+                        phi - object_phase_shrink / (phi + epsilon_l0),
+                        0.0,
+                    )
+                else:
+                    phi = np.maximum(phi - object_phase_shrink, 0.0)
                 O = np.exp(1j * phi)
+
+            # Sample support: outside the known sample region the object
+            # must be vacuum (O=1). Without this, the half-lattice gauge
+            # ambiguity (phase_nonneg admits both the original lattice
+            # and a body-centred shifted version with identical
+            # diffraction) can spread phantom atoms beyond the true
+            # sample boundary, producing the apparent "7×7 lattice over
+            # a 6×6 truth" superposition. Pinning the boundary breaks
+            # the gauge.
+            if sample_support is not None:
+                # broadcast (H, W) over (n_slices, H, W)
+                O = np.where(sample_support[None, :, :], O, 1.0 + 0j)
 
             residuals.append(iter_residual)
             if verbose:
