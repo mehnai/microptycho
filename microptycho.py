@@ -353,11 +353,24 @@ class MicroPtycho:
         return field * np.exp(-1j * (ax * X + ay * Y + c))
 
     @staticmethod
-    def align_translation(field, reference, threshold=0.3):
+    def align_translation(field, reference, threshold=0.3, weight='auto'):
         """
         Remove a real-space translation between `field` and `reference`
-        by matching the phase-weighted centroids of the two images
+        by matching the weight-weighted centroids of the two images
         (sub-pixel precision, no parameters to tune).
+
+        Parameters
+        ----------
+        weight : 'auto' | 'phase' | 'amplitude'
+            'phase'     for objects (atoms = phase peaks on a flat
+                         vacuum background; |O|=1 everywhere so amplitude
+                         is uninformative).
+            'amplitude' for probes (phase is non-localizing because Cs
+                         rings wrap across the whole patch; only |probe|
+                         localizes the centre of the probe).
+            'auto'      pick whichever of {amp, phase} has higher
+                         coefficient-of-variation, i.e. is the more
+                         informative localiser for THIS field.
 
         Why not cross-correlation? Three failure modes for our regime:
           - |O|=1 everywhere (unit-modulus object) → F[0,0]≈N², so the
@@ -380,28 +393,33 @@ class MicroPtycho:
         geometric centre), unaffected by unit-modulus DC, and
         intrinsically sub-pixel.
 
-        Threshold: only pixels with phase ≥ `threshold` × max contribute,
-        so the centroid is computed over the atom-bearing region rather
-        than diluted by background phase noise. With symmetric corner-
-        dimming (the typical edge-effect mode), the centroid is
-        unbiased: dim atoms at symmetric positions still contribute to
-        a centroid at the geometric centre.
+        Threshold: only pixels with weight ≥ `threshold` × max contribute,
+        so the centroid is computed over the atom-bearing (or probe-
+        peak) region rather than diluted by background noise.
         """
         if field.shape != reference.shape:
             raise ValueError("field and reference must have identical shapes.")
         ny, nx = field.shape
 
-        def _centroid(complex_field):
+        def _pick_weight(complex_field):
+            if weight == 'phase':
+                return np.angle(complex_field)
+            if weight == 'amplitude':
+                return np.abs(complex_field)
+            amp = np.abs(complex_field)
             phi = np.angle(complex_field)
-            cutoff = max(phi.max() * threshold, 1e-6)
-            mask = phi > cutoff
+            amp_cv = amp.std() / max(amp.mean(), 1e-12)
+            phi_cv = phi.std() / max(abs(phi.mean()), 1e-12)
+            return amp if amp_cv > phi_cv else phi
+
+        def _centroid(complex_field):
+            w = _pick_weight(complex_field)
+            cutoff = max(w.max() * threshold, 1e-12)
+            mask = w > cutoff
             if not mask.any():
                 return 0.0, 0.0
-            yy, xx = np.indices(phi.shape)
-            # Weight by (phi - cutoff) so brighter atoms count more,
-            # subtracting the cutoff floor so threshold-crossing pixels
-            # don't get a nonzero weight just for being above floor.
-            weights = (phi - cutoff) * mask
+            yy, xx = np.indices(w.shape)
+            weights = (w - cutoff) * mask
             total = weights.sum()
             if total <= 0:
                 return 0.0, 0.0

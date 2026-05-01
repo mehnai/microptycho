@@ -489,6 +489,20 @@ probe_init = np.fft.fftshift(probe_ideal)[
     _c - _ideal_patch_hp: _c + _ideal_patch_hp,
 ].copy()
 
+# Sample support breaks the body-centred-lattice gauge ambiguity.
+# A 6x6 SC lattice rotated by `rotation_deg` lives inside a rotated
+# square; outside that square the object must be vacuum (O = 1).
+# The phantom B-sublattice solution requires phase outside the true
+# bbox, so pinning the boundary kills it. Buffer of 1.5·spacing keeps
+# the Gaussian atom envelopes at the boundary unclipped.
+_theta = np.deg2rad(DEMO["rotation_deg"])
+_X_unrot =  np.cos(_theta) * mp.X + np.sin(_theta) * mp.Y
+_Y_unrot = -np.sin(_theta) * mp.X + np.cos(_theta) * mp.Y
+_half_extent = (_n_atoms_side - 1) / 2.0 * _in_plane_spacing + 1.5 * _in_plane_spacing
+sample_support = (np.abs(_X_unrot) <= _half_extent) & (np.abs(_Y_unrot) <= _half_extent)
+print(f"  Sample support: {sample_support.sum()} px inside "
+      f"({100*sample_support.mean():.1f}% of FOV)")
+
 step(f"Running {DEMO['n_iter']} ePIE iterations over {len(grid_positions)} positions...")
 probe_recon, O_recon, residuals = mp.multislice_ePIE(
     n_iter=DEMO["n_iter"],
@@ -509,6 +523,7 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     probe_fourier_support=probe_fourier_support,
     probe_warmup_iters=0,
     probe_phase='parameterized',
+    sample_support=sample_support,
     random_seed=7,
 )
 
@@ -693,7 +708,16 @@ save("13_recon_projected_phase.png")
 mp.plot_multislice_reconstruction(O_recon_aligned, O_true)
 save("14_multislice_reconstruction.png")
 
-probe_recon_aligned = mp.align_translation(probe_recon, probe_patch)
+# Missing ifftshift: the parametric Krivanek snap reconstructs the
+# probe via F_fit = template · exp(i·B@c) where the basis has no k¹
+# term — so any LINEAR phase ramp in F (which encodes the probe's
+# real-space centring at array index N/2 rather than at FFT-origin
+# index 0,0) is dropped. The recon probe then collapses to FFT-origin
+# layout, which when displayed against extent=[-half, +half] shows
+# as four corner peaks (wraparound). Pre-shift back to centred-real
+# layout before alignment/display.
+probe_recon = np.fft.fftshift(probe_recon)
+probe_recon_aligned = mp.align_translation(probe_recon, probe_patch, weight='amplitude')
 probe_recon_aligned = mp.align_phase_affine(probe_recon_aligned, probe_patch, dx=mp.dx)
 
 extent = np.array([-patch_size//2, patch_size//2,
