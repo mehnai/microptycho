@@ -499,27 +499,16 @@ probe_recon, O_recon, residuals = mp.multislice_ePIE(
     fresnel_kernel=fresnel_kernel,
     dx=mp.dx,
     patch_size=patch_size,
-    # Canonical CLAUDE.md recipe for the 36-atom sparse demo.
-    alpha_0=3.0,                           # probe dominates diffraction,
-                                           #   so object gradients are weak
+    # Canonical CLAUDE.md ePIE recipe for the 36-atom sparse demo.
+    alpha_0=3.0,
     beta_0=0.2,
     tau=80,
-    object_constraint='phase_nonneg',      # V ≥ 0 ⇒ phase ≥ 0 (exact)
-    rho_object=0.05,                       # low Tikhonov, rely on constraint
+    object_constraint='phase_nonneg',
+    rho_object=0.05,
     rho_probe=0.3,
     probe_fourier_support=probe_fourier_support,
-    probe_warmup_iters=0,                  # aperture lock makes warmup
-                                           #   unnecessary
-    probe_phase='parameterized',           # post-hoc fit the converged
-                                           #   |F(probe)| phase to a 12-
-                                           #   coefficient Krivanek
-                                           #   expansion (C1, A1, B2, A2,
-                                           #   C3, S3, A3). Replaces
-                                           #   ~hundreds of free per-k
-                                           #   phases with a denoised,
-                                           #   physically-valid aberrated
-                                           #   probe and prints the fitted
-                                           #   coefficients.
+    probe_warmup_iters=0,
+    probe_phase='parameterized',
     random_seed=7,
 )
 
@@ -549,16 +538,58 @@ def _phase_centroid(O_complex, threshold=0.3):
     total = weights.sum()
     return float((xx * weights).sum() / total), float((yy * weights).sum() / total)
 
+# Lattice-gauge alignment for periodic samples. Sparse periodic ePIE
+# has a fundamental degeneracy: shifting the recon by any lattice
+# vector (or half-lattice vector for body-centred-equivalent lattices)
+# produces an equally-valid solution that has the same diffraction
+# intensities. Centroid matching cannot resolve this — lattice
+# symmetry preserves the centroid under body-centred shifts. To pick
+# the gauge that matches truth for fair visual comparison, scan
+# fractional-lattice-period shifts and pick the one whose recon phase
+# correlates best with truth phase. This step uses TRUTH and is
+# therefore demo-only — in a real experiment without ground truth,
+# the recovered lattice is "up to a translation" and the ambiguity
+# is accepted (absolute lattice position is unobservable).
+#
+# Note: do NOT apply align_translation BEFORE the lattice search.
+# Centroid alignment shifts the recon to match truth's centroid; if
+# the recon is in the body-centred gauge (whose centroid coincides
+# with truth's), centroid alignment leaves the gauge intact, then
+# any subsequent lattice shift gets fought by the next centroid
+# realignment. Run lattice search first, then optional sub-pixel
+# refinement.
+_lattice_period_px = _in_plane_spacing / mp.dx
+_search_radius_px = _lattice_period_px
+
 O_recon_aligned = O_recon.copy()
+_ny, _nx = O_recon_aligned[0].shape
+_ky = np.fft.fftfreq(_ny); _kx = np.fft.fftfreq(_nx)
+_KX, _KY = np.meshgrid(_kx, _ky)
+
+def _fourier_shift(field, sx, sy):
+    return np.fft.ifft2(np.fft.fft2(field) * np.exp(1j*2*np.pi*(sx*_KX + sy*_KY)))
+
 for k in range(n_slices):
     cx_t, cy_t = _phase_centroid(O_true[k])
     cx_b, cy_b = _phase_centroid(O_recon_aligned[k])
-    O_recon_aligned[k] = mp.align_translation(
-        O_recon_aligned[k], O_true[k],
-    )
+    # Step 1: lattice-gauge search on the un-aligned recon. Use a
+    # 0.5-px grid covering ±1 lattice period so we hit any of the
+    # equivalent body-centred / lattice-shifted gauges.
+    _phi_t = np.angle(O_true[k])
+    _best_shift, _best_score = (0.0, 0.0), -1e18
+    for _dy in np.arange(-_search_radius_px, _search_radius_px + 0.25, 0.5):
+        for _dx in np.arange(-_search_radius_px, _search_radius_px + 0.25, 0.5):
+            _candidate = _fourier_shift(O_recon_aligned[k], _dx, _dy)
+            _score = float(np.sum(np.angle(_candidate) * _phi_t))
+            if _score > _best_score:
+                _best_score = _score
+                _best_shift = (_dx, _dy)
+    if _best_shift != (0.0, 0.0):
+        O_recon_aligned[k] = _fourier_shift(O_recon_aligned[k], *_best_shift)
     cx_a, cy_a = _phase_centroid(O_recon_aligned[k])
-    print(f"  Centroid slice {k}: truth=({cx_t:.2f},{cy_t:.2f}) "
-          f"recon_pre=({cx_b:.2f},{cy_b:.2f}) (Δ={cx_b-cx_t:+.2f},{cy_b-cy_t:+.2f}) "
+    print(f"  Slice {k}: lattice-gauge shift=({_best_shift[0]:+.1f},{_best_shift[1]:+.1f}) px; "
+          f"truth_centroid=({cx_t:.2f},{cy_t:.2f}) "
+          f"recon_pre=({cx_b:.2f},{cy_b:.2f}) "
           f"recon_post=({cx_a:.2f},{cy_a:.2f}) (Δ={cx_a-cx_t:+.2f},{cy_a-cy_t:+.2f})")
     O_recon_aligned[k] = mp.align_phase_affine(
         O_recon_aligned[k],
@@ -635,19 +666,26 @@ print(f"  Inner-4 atoms mean recovery ratio: {_inner_ratio:.2%}")
 print(f"  Outer-4 atoms mean recovery ratio: {_outer_ratio:.2%} (edge effect: "
       f"outer/inner = {_outer_ratio / _inner_ratio:.2%})")
 
-# Use a linear (non-cyclic) colormap for the projected phase. The
-# previous twilight cmap is cyclic — with vmin=0/vmax=phase_max it maps
-# both ends to nearly the same light colour and the middle to dark, so
-# atoms at half-max recon phase look like dark dots ("atoms-as-gaps")
-# even though the recon is correct (atom-gap contrast positive).
-_vmin = 0.0
+# Linear inferno cmap (was cyclic twilight earlier — that mapped half-
+# max recon phase to dark, making atoms look like dark dots).
+# Power-law display (γ=2): without this, the low-phase noise floor
+# between atoms (sub-percent of true atom phase but uniformly elevated)
+# reads as a phantom lattice that visually looks denser than truth's
+# 6×6. The noise floor is below the phase resolution of the
+# reconstruction; γ=2 maps it toward black so only above-threshold
+# atoms are visible. Truth panel uses the same γ=2 for fair comparison
+# (γ=1 would let truth's flat-zero gaps stay completely black, so
+# γ=2 changes nothing visible there but makes the recon panel readable).
 _vmax = float(true_proj.max())
+_gamma = 2.0
+def _gamma_map(arr, vmax=_vmax, gamma=_gamma):
+    return (np.maximum(arr, 0) / vmax) ** gamma * vmax
 fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-im0 = axes[0].imshow(true_proj, cmap='inferno', vmin=_vmin, vmax=_vmax)
-axes[0].set_title("True projected phase (sum over slices)")
+im0 = axes[0].imshow(_gamma_map(true_proj), cmap='inferno', vmin=0, vmax=_vmax)
+axes[0].set_title("True projected phase (γ=2 display)")
 plt.colorbar(im0, ax=axes[0], label='phase (rad)')
-im1 = axes[1].imshow(recon_proj, cmap='inferno', vmin=_vmin, vmax=_vmax)
-axes[1].set_title("Reconstructed projected phase (sum over slices)")
+im1 = axes[1].imshow(_gamma_map(recon_proj), cmap='inferno', vmin=0, vmax=_vmax)
+axes[1].set_title("Reconstructed projected phase (γ=2 display)")
 plt.colorbar(im1, ax=axes[1], label='phase (rad)')
 plt.tight_layout()
 save("13_recon_projected_phase.png")

@@ -674,7 +674,10 @@ class MicroPtycho:
                         fresnel_kernel=None, dx=None, patch_size=24,
                         alpha_0=1e-3, beta_0=None, tau=10,
                         object_constraint=None, rho_object=0.2, rho_probe=0.2,
-                        object_phase_shrink=0.0, probe_update_clip=0.0,
+                        object_phase_shrink=0.0,
+                        object_phase_shrink_reweighted=False,
+                        epsilon_l0=5e-3,
+                        probe_update_clip=0.0,
                         normalize_probe=True, remove_probe_phase_ramp=True,
                         probe_fourier_support=None, probe_warmup_iters=0,
                         probe_phase='free',
@@ -851,7 +854,25 @@ class MicroPtycho:
                     probe = self._project_probe_to_aperture(probe, probe_fourier_support)
 
             if object_phase_shrink > 0 and object_constraint in ("phase_nonneg", "phase_positive"):
-                phi = np.maximum(np.angle(O) - object_phase_shrink, 0.0)
+                phi = np.angle(O)
+                if object_phase_shrink_reweighted:
+                    # Iteratively-reweighted L1 (approx. L0 sparsity):
+                    # shrink penalty inversely scales with current
+                    # phase magnitude, so dim phantom atoms
+                    # (phi ≪ epsilon_l0) are heavily suppressed while
+                    # bright real atoms (phi ≫ epsilon_l0) barely
+                    # shrink at all. This is the right prior for
+                    # sparse periodic samples — plain L1 (uniform
+                    # shrink) treats real and phantom atoms equally
+                    # if their magnitudes have converged to similar
+                    # levels, leaving the lattice-doubling gauge
+                    # intact.
+                    phi = np.maximum(
+                        phi - object_phase_shrink / (phi + epsilon_l0),
+                        0.0,
+                    )
+                else:
+                    phi = np.maximum(phi - object_phase_shrink, 0.0)
                 O = np.exp(1j * phi)
 
             # Sample support: outside the known sample region the object
